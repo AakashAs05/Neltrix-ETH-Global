@@ -3,9 +3,9 @@
 This is deliberately separate from graph_client.py / standardized_query.py,
 which power the core `/api/ohlcv` and `/api/analyse` pipeline directly
 against the gateway (fast, deterministic, easy to test). Subgraph MCP is
-used specifically for the natural-language surface described in the plan —
+used specifically for the natural-language surface described in the plan,
 e.g. an agent asking "show me bearish patterns forming on ETH/USDC pools
-across DEXs" — where translating free text into a GraphQL query is the
+across DEXs", where translating free text into a GraphQL query is the
 actual value MCP adds.
 
 Not wired into the core pipeline: MCP tool calls in this codebase are made

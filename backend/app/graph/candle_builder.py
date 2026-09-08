@@ -1,7 +1,7 @@
 """Turns raw swap events into OHLCV candles.
 
 Messari's standardized DEX schema (see standardized_query.py) does not
-ship pre-built price candles — `LiquidityPool` exposes cumulative
+ship pre-built price candles - `LiquidityPool` exposes cumulative
 volume/TVL/fee metrics, not open/high/low/close. What it does give us is
 every individual `Swap`, each carrying enough information to derive an
 instantaneous price:
@@ -10,7 +10,7 @@ instantaneous price:
     amountOut, amountOutUSD, tokenOut { symbol, decimals }
 
 For a chosen "base" token (e.g. WETH in a USDC/WETH pool), each swap gives
-one price sample — base-token value in USD — regardless of which side of
+one price sample, base-token value in USD, regardless of which side of
 the pair was bought or sold. This module buckets those samples into fixed
 time windows and reduces each bucket to an OHLCV candle, the same shape
 Neltrix's pattern-detection engine expects.

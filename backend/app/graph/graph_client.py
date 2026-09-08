@@ -1,7 +1,7 @@
 """Thin, generic GraphQL client for The Graph's decentralized-network gateway.
 
-Every Graph query in this project — regardless of which protocol or chain it
-targets — goes through this one client. It knows nothing about DEXes,
+Every Graph query in this project, regardless of which protocol or chain it
+targets, goes through this one client. It knows nothing about DEXes,
 pools, or OHLCV; it just authenticates, POSTs a query to a subgraph ID, and
 surfaces GraphQL errors as Python exceptions instead of silently returning
 partial data.

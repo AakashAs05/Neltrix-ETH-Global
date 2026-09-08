@@ -2,7 +2,7 @@
 
 This is the file that earns Neltrix its "composable across The Graph"
 claim. Uniswap V3 and SushiSwap are two independently-built, independently
-maintained AMMs — but Messari publishes both of them as "dex-amm"
+maintained AMMs, but Messari publishes both of them as "dex-amm"
 Standardized Subgraphs, which means both expose the *same* GraphQL schema
 (`DexAmmProtocol`, `LiquidityPool`, `Swap`, ...). Every function below takes
 a `protocol` key and dispatches to a different subgraph ID, but sends the
@@ -10,13 +10,13 @@ exact same query string either way. Nothing here is Uniswap-specific or
 Sushi-specific.
 
 Verified subgraph IDs (Messari "dex-amm" schema family, Ethereum mainnet,
-decentralized network — checked live against the gateway on 2026-09-08):
+decentralized network, checked live against the gateway on 2026-09-08):
 
     uniswap-v3-ethereum  -> 4cKy6QQMc5tpfdx8yxfYeb9TLZmgLQe44ddW1G7NwkA6
     sushiswap-ethereum   -> 77jZ9KWeyi3CJ96zkkj5s1CojKPHt6XJKjLFzsDCd8Fd
 
 Adding a third protocol (e.g. uniswap-v2-ethereum, also "dex-amm") is a
-one-line addition to PROTOCOLS below — no new query, no new parsing code.
+one-line addition to PROTOCOLS below, no new query, no new parsing code.
 """
 
 from __future__ import annotations

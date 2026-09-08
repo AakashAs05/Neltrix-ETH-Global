@@ -14,6 +14,6 @@ from __future__ import annotations
 
 def get_candles_via_substreams(*_args, **_kwargs):
     raise NotImplementedError(
-        "Substreams path not implemented — the standardized-subgraph query "
+        "Substreams path not implemented, the standardized-subgraph query "
         "path (standardized_query.py + candle_builder.py) is the one in use."
     )
