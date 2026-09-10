@@ -70,42 +70,109 @@ def _detect_double_top_bottom(swings: list[SwingPoint], candles: list[Candle]) -
     return matches
 
 
+# The head has to actually stand out from the shoulders. Without this a
+# barely-higher middle peak in ordinary chop reads as a Head & Shoulders,
+# which is why six of them were being reported in a single week of hourly
+# candles — a formation that should be rare.
+MIN_HEAD_PROMINENCE = 0.02
+
+# The two troughs between the peaks form the neckline. A real formation
+# has a roughly level neckline; if the two lows are far apart the shape
+# isn't the pattern regardless of what the peaks do.
+NECKLINE_TOLERANCE = 0.03
+
+
+def _head_and_shoulders_confidence(
+    left: SwingPoint, head: SwingPoint, right: SwingPoint, neck_a: float, neck_b: float
+) -> float:
+    """Score how well-formed the shape is, rather than assuming a flat 0.65.
+
+    Three independent qualities, averaged: how symmetric the shoulders
+    are, how level the neckline is, and how far the head stands proud of
+    the shoulders. All three are what a chartist actually eyeballs.
+    """
+    shoulder_symmetry = 1 - min(1.0, abs(left.price - right.price) / max(left.price, 1e-9) / 0.04)
+    neckline_levelness = 1 - min(1.0, abs(neck_a - neck_b) / max(neck_a, 1e-9) / NECKLINE_TOLERANCE)
+    shoulder_avg = (left.price + right.price) / 2
+    prominence = abs(head.price - shoulder_avg) / max(shoulder_avg, 1e-9)
+    prominence_score = min(1.0, prominence / 0.06)
+    return max(0.0, min(1.0, (shoulder_symmetry + neckline_levelness + prominence_score) / 3))
+
+
 def _detect_head_and_shoulders(swings: list[SwingPoint], candles: list[Candle]) -> list[PatternMatch]:
     matches: list[PatternMatch] = []
     highs = [s for s in swings if s.kind == "high"]
     lows = [s for s in swings if s.kind == "low"]
 
+    def troughs_between(a: SwingPoint, b: SwingPoint, source: list[SwingPoint]) -> list[SwingPoint]:
+        return [s for s in source if a.index < s.index < b.index]
+
     for left, head, right in zip(highs, highs[1:], highs[2:]):
-        if head.price > left.price and head.price > right.price and _close_enough(left.price, right.price, tolerance=0.04):
-            matches.append(
-                PatternMatch(
-                    name="Head and Shoulders",
-                    category="classic",
-                    direction=BEARISH,
-                    confidence=0.65,
-                    start_index=left.index,
-                    end_index=right.index,
-                    start_timestamp=left.timestamp,
-                    end_timestamp=right.timestamp,
-                    description=f"Head at ${head.price:.4f} above two roughly-equal shoulders (${left.price:.4f}, ${right.price:.4f}).",
-                )
+        if not (head.price > left.price and head.price > right.price):
+            continue
+        if not _close_enough(left.price, right.price, tolerance=0.04):
+            continue
+        shoulder_avg = (left.price + right.price) / 2
+        if (head.price - shoulder_avg) / shoulder_avg < MIN_HEAD_PROMINENCE:
+            continue
+        # Neckline: the lows between left/head and head/right.
+        first = troughs_between(left, head, lows)
+        second = troughs_between(head, right, lows)
+        if not first or not second:
+            continue
+        neck_a, neck_b = min(s.price for s in first), min(s.price for s in second)
+        if not _close_enough(neck_a, neck_b, tolerance=NECKLINE_TOLERANCE):
+            continue
+
+        matches.append(
+            PatternMatch(
+                name="Head and Shoulders",
+                category="classic",
+                direction=BEARISH,
+                confidence=_head_and_shoulders_confidence(left, head, right, neck_a, neck_b),
+                start_index=left.index,
+                end_index=right.index,
+                start_timestamp=left.timestamp,
+                end_timestamp=right.timestamp,
+                description=(
+                    f"Head at ${head.price:.4f} above two roughly-equal shoulders "
+                    f"(${left.price:.4f}, ${right.price:.4f}), neckline near ${(neck_a + neck_b) / 2:.4f}."
+                ),
             )
+        )
 
     for left, head, right in zip(lows, lows[1:], lows[2:]):
-        if head.price < left.price and head.price < right.price and _close_enough(left.price, right.price, tolerance=0.04):
-            matches.append(
-                PatternMatch(
-                    name="Inverse Head and Shoulders",
-                    category="classic",
-                    direction=BULLISH,
-                    confidence=0.65,
-                    start_index=left.index,
-                    end_index=right.index,
-                    start_timestamp=left.timestamp,
-                    end_timestamp=right.timestamp,
-                    description=f"Head at ${head.price:.4f} below two roughly-equal shoulders (${left.price:.4f}, ${right.price:.4f}).",
-                )
+        if not (head.price < left.price and head.price < right.price):
+            continue
+        if not _close_enough(left.price, right.price, tolerance=0.04):
+            continue
+        shoulder_avg = (left.price + right.price) / 2
+        if (shoulder_avg - head.price) / shoulder_avg < MIN_HEAD_PROMINENCE:
+            continue
+        first = troughs_between(left, head, highs)
+        second = troughs_between(head, right, highs)
+        if not first or not second:
+            continue
+        neck_a, neck_b = max(s.price for s in first), max(s.price for s in second)
+        if not _close_enough(neck_a, neck_b, tolerance=NECKLINE_TOLERANCE):
+            continue
+
+        matches.append(
+            PatternMatch(
+                name="Inverse Head and Shoulders",
+                category="classic",
+                direction=BULLISH,
+                confidence=_head_and_shoulders_confidence(left, head, right, neck_a, neck_b),
+                start_index=left.index,
+                end_index=right.index,
+                start_timestamp=left.timestamp,
+                end_timestamp=right.timestamp,
+                description=(
+                    f"Head at ${head.price:.4f} below two roughly-equal shoulders "
+                    f"(${left.price:.4f}, ${right.price:.4f}), neckline near ${(neck_a + neck_b) / 2:.4f}."
+                ),
             )
+        )
     return matches
 
 
