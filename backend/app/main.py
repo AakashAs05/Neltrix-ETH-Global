@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.routes_analyse import router as analyse_router
 from app.api.routes_ohlcv import router as ohlcv_router
 
 app = FastAPI(title="Neltrix ETH Global")
@@ -13,6 +14,7 @@ app.add_middleware(
 )
 
 app.include_router(ohlcv_router)
+app.include_router(analyse_router)
 
 
 @app.get("/api/health")
