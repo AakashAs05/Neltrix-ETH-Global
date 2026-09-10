@@ -28,6 +28,16 @@ INTERVAL_SECONDS = {
     "1d": 86400,
 }
 
+# How far back a request can ask for. Which of these is actually cheap
+# depends on the source — see graph/candle_source.py.
+RANGE_SECONDS = {
+    "1d": 86_400,
+    "1w": 604_800,
+    "1m": 2_592_000,  # 30d
+    "3m": 7_776_000,  # 90d
+    "1y": 31_536_000,  # 365d
+}
+
 
 @dataclass(frozen=True)
 class Candle:
@@ -108,3 +118,95 @@ def build_ohlcv(swaps: list[dict], base_symbol: str, interval: str = "1h") -> li
             )
         )
     return candles
+
+
+def resample(candles: list[Candle], interval: str) -> list[Candle]:
+    """Roll finer candles up into wider ones (e.g. hourly -> 4h).
+
+    Only ever used to go coarser: a subgraph publishes hourly and daily
+    aggregates, so a 4h request is served by rolling up 4 hourly candles
+    rather than replaying every swap in the window.
+    """
+    if interval not in INTERVAL_SECONDS:
+        raise ValueError(f"Unknown interval '{interval}'. Choose from {list(INTERVAL_SECONDS)}")
+    bucket_width = INTERVAL_SECONDS[interval]
+
+    buckets: dict[int, list[Candle]] = {}
+    for candle in sorted(candles, key=lambda c: c.timestamp):
+        bucket_start = (candle.timestamp // bucket_width) * bucket_width
+        buckets.setdefault(bucket_start, []).append(candle)
+
+    return [
+        Candle(
+            timestamp=bucket_start,
+            open=group[0].open,
+            high=max(c.high for c in group),
+            low=min(c.low for c in group),
+            close=group[-1].close,
+            volume_usd=sum(c.volume_usd for c in group),
+            trade_count=sum(c.trade_count for c in group),
+        )
+        for bucket_start, group in sorted(buckets.items())
+    ]
+
+
+# A single candle spanning more than this ratio between its high and low
+# is an indexing artifact, not price action. Pool-creation rows are the
+# usual culprit: they record a dust initialization price alongside a real
+# one, which after inversion reads as a 100,000x wick.
+MAX_CANDLE_HIGH_LOW_RATIO = 20.0
+
+
+@dataclass(frozen=True)
+class SanitizeReport:
+    kept: int
+    dropped_non_positive: int
+    dropped_zero_volume: int
+    dropped_extreme_range: int
+
+    @property
+    def dropped_total(self) -> int:
+        return self.dropped_non_positive + self.dropped_zero_volume + self.dropped_extreme_range
+
+
+def sanitize_candles(candles: list[Candle]) -> tuple[list[Candle], SanitizeReport]:
+    """Drop candles that carry no usable price information.
+
+    Subgraph-published aggregates are not clean. On the Uniswap V4
+    ETH/USDC pool, the two rows at pool creation (2025-01-23/24) record a
+    ~3.3e-21 price with zero volume, which inverts to roughly $3e20 — one
+    of those in a series is enough to collapse every real candle onto a
+    flat line once the chart autoscales.
+
+    The rules are deliberately asset-agnostic — no hardcoded price bands,
+    since the same code charts ETH, WBTC and whatever else a pool holds:
+
+      1. any non-positive OHLC value is structurally invalid
+      2. zero traded volume means no price was discovered in the period
+      3. a high/low ratio beyond MAX_CANDLE_HIGH_LOW_RATIO is an artifact
+
+    Counts come back in the report rather than being swallowed, so the API
+    can tell the caller what was removed instead of quietly reshaping data.
+    """
+    kept: list[Candle] = []
+    non_positive = zero_volume = extreme = 0
+
+    for candle in candles:
+        values = (candle.open, candle.high, candle.low, candle.close)
+        if min(values) <= 0:
+            non_positive += 1
+            continue
+        if candle.volume_usd <= 0:
+            zero_volume += 1
+            continue
+        if max(values) / min(values) > MAX_CANDLE_HIGH_LOW_RATIO:
+            extreme += 1
+            continue
+        kept.append(candle)
+
+    return kept, SanitizeReport(
+        kept=len(kept),
+        dropped_non_positive=non_positive,
+        dropped_zero_volume=zero_volume,
+        dropped_extreme_range=extreme,
+    )

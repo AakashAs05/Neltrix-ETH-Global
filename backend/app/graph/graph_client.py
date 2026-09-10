@@ -29,7 +29,9 @@ class GraphQueryError(RuntimeError):
 class GraphClient:
     """Executes GraphQL queries against a subgraph on The Graph's gateway."""
 
-    def __init__(self, api_key: str | None = None, gateway_url: str | None = None, timeout: float = 15.0):
+    # Paged swap queries against a busy pool are genuinely slow; 15s was
+    # tight enough that healthy-but-loaded indexers timed out.
+    def __init__(self, api_key: str | None = None, gateway_url: str | None = None, timeout: float = 30.0):
         self.api_key = api_key or GRAPH_API_KEY
         self.gateway_url = (gateway_url or GRAPH_GATEWAY_URL).rstrip("/")
         self.timeout = timeout
@@ -62,6 +64,13 @@ class GraphClient:
         moment later routes around it and succeeds. So a handful of
         retries here is standard practice for this API, not a sign of a
         broken query.
+
+        A slow indexer can also stall past the client timeout instead of
+        answering, which surfaces as httpx.TimeoutException rather than a
+        GraphQL error. That's the same transient condition and gets the
+        same retry — and if every attempt fails it's re-raised as a
+        GraphQueryError, so callers have exactly one exception type to
+        handle and the API returns a useful 502 instead of a bare 500.
         """
         payload: dict[str, Any] = {"query": query}
         if variables:
@@ -69,14 +78,20 @@ class GraphClient:
 
         last_error: GraphQueryError | None = None
         for attempt in range(retries):
-            response = httpx.post(self._endpoint(subgraph_id), json=payload, timeout=self.timeout)
-            response.raise_for_status()
-            body = response.json()
+            try:
+                response = httpx.post(self._endpoint(subgraph_id), json=payload, timeout=self.timeout)
+                response.raise_for_status()
+                body = response.json()
 
-            if "errors" not in body:
-                return body["data"]
+                if "errors" not in body:
+                    return body["data"]
 
-            last_error = GraphQueryError(str(body["errors"]))
+                last_error = GraphQueryError(str(body["errors"]))
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                last_error = GraphQueryError(
+                    f"transport failure talking to the gateway ({type(exc).__name__}: {exc})"
+                )
+
             if attempt < retries - 1:
                 time.sleep(retry_backoff_seconds * (attempt + 1))
 

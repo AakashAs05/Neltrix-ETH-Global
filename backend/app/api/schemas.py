@@ -9,6 +9,8 @@ class ProtocolOut(BaseModel):
     key: str
     display_name: str
     network: str
+    schema_family: str  # "messari-dex-amm" | "uniswap-native"
+    is_flagship: bool = False
 
 
 class TokenOut(BaseModel):
@@ -39,4 +41,9 @@ class OHLCVResponse(BaseModel):
     pool: str
     base_symbol: str
     interval: str
+    range: str
+    source: str  # "subgraph-aggregate" | "derived-from-swaps"
+    quote_symbol: str
+    truncated: bool = False
+    notes: list[str] = Field(default_factory=list)
     candles: list[CandleOut] = Field(default_factory=list)

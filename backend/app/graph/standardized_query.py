@@ -102,14 +102,13 @@ query TopPools($first: Int!) {
 # pages through this in chunks of up to 1000 for any larger `limit`.
 MAX_PAGE_SIZE = 1000
 
-RECENT_SWAPS_QUERY = """
-query RecentSwaps($pool: String!, $first: Int!) {
-  swaps(
-    first: $first
-    orderBy: timestamp
-    orderDirection: desc
-    where: { pool: $pool }
-  ) {
+# The field selection is the part that has to stay identical across
+# protocols — that's the composability claim. The surrounding filters
+# (pagination cursor, range bound) are generic plumbing and are assembled
+# per-call below, because graph-node rejects a null `timestamp_lte` /
+# `timestamp_gte`: an unused bound has to be absent from the query text,
+# not passed as a null variable.
+_SWAP_FIELDS = """
     id
     timestamp
     amountIn
@@ -118,32 +117,38 @@ query RecentSwaps($pool: String!, $first: Int!) {
     amountOutUSD
     tokenIn { symbol decimals }
     tokenOut { symbol decimals }
-  }
-}
 """
 
-# Same query, plus a `timestamp_lte` cursor for continuing past page one.
-# graph-node rejects `timestamp_lte: null`, so this can't just be an
-# optional variable on RECENT_SWAPS_QUERY above — it has to be a separate
-# query string used only once a cursor exists.
-RECENT_SWAPS_QUERY_PAGE = """
-query RecentSwapsPage($pool: String!, $first: Int!, $before: BigInt!) {
+RECENT_SWAPS_QUERY = f"""
+query RecentSwaps($pool: String!, $first: Int!) {{
+  swaps(first: $first, orderBy: timestamp, orderDirection: desc, where: {{ pool: $pool }}) {{
+{_SWAP_FIELDS}
+  }}
+}}
+"""
+
+
+def _build_swaps_query(*, with_cursor: bool, with_since: bool) -> str:
+    declarations = ["$pool: String!", "$first: Int!"]
+    filters = ["pool: $pool"]
+    if with_cursor:
+        declarations.append("$before: BigInt!")
+        filters.append("timestamp_lte: $before")
+    if with_since:
+        declarations.append("$since: BigInt!")
+        filters.append("timestamp_gte: $since")
+
+    return f"""
+query RecentSwaps({", ".join(declarations)}) {{
   swaps(
     first: $first
     orderBy: timestamp
     orderDirection: desc
-    where: { pool: $pool, timestamp_lte: $before }
-  ) {
-    id
-    timestamp
-    amountIn
-    amountInUSD
-    amountOut
-    amountOutUSD
-    tokenIn { symbol decimals }
-    tokenOut { symbol decimals }
-  }
-}
+    where: {{ {", ".join(filters)} }}
+  ) {{
+{_SWAP_FIELDS}
+  }}
+}}
 """
 
 
@@ -154,7 +159,9 @@ def get_top_pools(protocol_key: str, limit: int = 20) -> list[dict[str, Any]]:
     return data["liquidityPools"]
 
 
-def get_recent_swaps(protocol_key: str, pool_id: str, limit: int = 1000) -> list[dict[str, Any]]:
+def get_recent_swaps(
+    protocol_key: str, pool_id: str, limit: int = 1000, since: int | None = None
+) -> list[dict[str, Any]]:
     """Raw swap events for one pool, newest first. Feeds candle_builder.
 
     Pages through MAX_PAGE_SIZE-sized chunks for any `limit` above that.
@@ -163,6 +170,11 @@ def get_recent_swaps(protocol_key: str, pool_id: str, limit: int = 1000) -> list
     that overlaps the previous page by design and results are deduped by
     `id` rather than risking a `timestamp_lt` cursor silently skipping
     swaps that share a timestamp with the page boundary.
+
+    `since` bounds how far back to walk. `limit` still caps the total:
+    Messari's schema publishes no OHLC aggregates, so a long range here
+    genuinely has to replay every swap, and the cap is what stops a
+    "1 year" request on a busy pool from crawling for minutes.
     """
     protocol = _get_protocol(protocol_key)
     client = get_client()
@@ -173,15 +185,24 @@ def get_recent_swaps(protocol_key: str, pool_id: str, limit: int = 1000) -> list
     cursor: int | None = None
 
     while len(collected) < limit:
-        page_size = min(MAX_PAGE_SIZE, limit - len(collected))
-        if cursor is None:
-            data = client.query(protocol.subgraph_id, RECENT_SWAPS_QUERY, {"pool": pool_id, "first": page_size})
-        else:
-            data = client.query(
-                protocol.subgraph_id,
-                RECENT_SWAPS_QUERY_PAGE,
-                {"pool": pool_id, "first": page_size, "before": cursor},
-            )
+        # Always request a full page rather than only the shortfall. Each
+        # page overlaps the previous one at the cursor timestamp and those
+        # duplicates are deduped away, so shrinking pages degenerate into
+        # a tail of 1-row requests that return nothing new — which used to
+        # leave the loop one row short of `limit` and made "did we hit the
+        # ceiling?" unanswerable. Overshoot is trimmed at the end instead.
+        page_size = MAX_PAGE_SIZE
+        variables: dict[str, Any] = {"pool": pool_id, "first": page_size}
+        if cursor is not None:
+            variables["before"] = cursor
+        if since is not None:
+            variables["since"] = since
+
+        data = client.query(
+            protocol.subgraph_id,
+            _build_swaps_query(with_cursor=cursor is not None, with_since=since is not None),
+            variables,
+        )
 
         page = data["swaps"]
         if not page:
