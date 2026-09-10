@@ -96,6 +96,12 @@ query TopPools($first: Int!) {
 }
 """
 
+# The Graph's gateway caps `first` at 1000 per query regardless of what
+# any individual indexer advertises — asking for more just returns a
+# "bad indexers" error instead of more rows. get_recent_swaps() below
+# pages through this in chunks of up to 1000 for any larger `limit`.
+MAX_PAGE_SIZE = 1000
+
 RECENT_SWAPS_QUERY = """
 query RecentSwaps($pool: String!, $first: Int!) {
   swaps(
@@ -104,6 +110,31 @@ query RecentSwaps($pool: String!, $first: Int!) {
     orderDirection: desc
     where: { pool: $pool }
   ) {
+    id
+    timestamp
+    amountIn
+    amountInUSD
+    amountOut
+    amountOutUSD
+    tokenIn { symbol decimals }
+    tokenOut { symbol decimals }
+  }
+}
+"""
+
+# Same query, plus a `timestamp_lte` cursor for continuing past page one.
+# graph-node rejects `timestamp_lte: null`, so this can't just be an
+# optional variable on RECENT_SWAPS_QUERY above — it has to be a separate
+# query string used only once a cursor exists.
+RECENT_SWAPS_QUERY_PAGE = """
+query RecentSwapsPage($pool: String!, $first: Int!, $before: BigInt!) {
+  swaps(
+    first: $first
+    orderBy: timestamp
+    orderDirection: desc
+    where: { pool: $pool, timestamp_lte: $before }
+  ) {
+    id
     timestamp
     amountIn
     amountInUSD
@@ -124,12 +155,51 @@ def get_top_pools(protocol_key: str, limit: int = 20) -> list[dict[str, Any]]:
 
 
 def get_recent_swaps(protocol_key: str, pool_id: str, limit: int = 1000) -> list[dict[str, Any]]:
-    """Raw swap events for one pool, newest first. Feeds candle_builder."""
+    """Raw swap events for one pool, newest first. Feeds candle_builder.
+
+    Pages through MAX_PAGE_SIZE-sized chunks for any `limit` above that.
+    The cursor is the oldest timestamp seen so far, refetched with
+    `timestamp_lte` — since many swaps can share one block's timestamp,
+    that overlaps the previous page by design and results are deduped by
+    `id` rather than risking a `timestamp_lt` cursor silently skipping
+    swaps that share a timestamp with the page boundary.
+    """
     protocol = _get_protocol(protocol_key)
-    data = get_client().query(
-        protocol.subgraph_id, RECENT_SWAPS_QUERY, {"pool": pool_id.lower(), "first": limit}
-    )
-    return data["swaps"]
+    client = get_client()
+    pool_id = pool_id.lower()
+
+    collected: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    cursor: int | None = None
+
+    while len(collected) < limit:
+        page_size = min(MAX_PAGE_SIZE, limit - len(collected))
+        if cursor is None:
+            data = client.query(protocol.subgraph_id, RECENT_SWAPS_QUERY, {"pool": pool_id, "first": page_size})
+        else:
+            data = client.query(
+                protocol.subgraph_id,
+                RECENT_SWAPS_QUERY_PAGE,
+                {"pool": pool_id, "first": page_size, "before": cursor},
+            )
+
+        page = data["swaps"]
+        if not page:
+            break
+
+        new_swaps = [s for s in page if s["id"] not in seen_ids]
+        if not new_swaps:
+            break  # every swap at this cursor has already been collected — no more pages
+
+        for swap in new_swaps:
+            seen_ids.add(swap["id"])
+        collected.extend(new_swaps)
+        cursor = int(page[-1]["timestamp"])
+
+        if len(page) < page_size:
+            break  # fewer rows than asked for — reached the end of history
+
+    return collected[:limit]
 
 
 POOL_INFO_QUERY = """
