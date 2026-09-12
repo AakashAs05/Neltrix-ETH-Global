@@ -130,6 +130,12 @@ def _from_aggregates(
             f"({report.dropped_non_positive} non-positive, {report.dropped_zero_volume} "
             f"zero-volume, {report.dropped_extreme_range} implausible range)."
         )
+    if report.clamped_wicks:
+        notes.append(
+            f"Clamped implausible wicks on {report.clamped_wicks} candle(s) — single "
+            "out-of-range prints (MEV sandwiches, dust swaps) had set highs/lows far "
+            "outside local price. Bodies are unchanged."
+        )
 
     candles = resample(clean, interval) if needs_resample else clean
 
@@ -192,6 +198,8 @@ def _from_swaps(
         )
     if report.dropped_total:
         notes.append(f"Dropped {report.dropped_total} unusable candle(s).")
+    if report.clamped_wicks:
+        notes.append(f"Clamped implausible wicks on {report.clamped_wicks} candle(s).")
 
     return CandleSeries(
         candles=clean,

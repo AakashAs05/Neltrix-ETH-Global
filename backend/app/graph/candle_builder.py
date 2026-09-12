@@ -19,6 +19,7 @@ Neltrix's pattern-detection engine expects.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from statistics import median
 
 INTERVAL_SECONDS = {
     "5m": 300,
@@ -163,10 +164,90 @@ class SanitizeReport:
     dropped_non_positive: int
     dropped_zero_volume: int
     dropped_extreme_range: int
+    clamped_wicks: int = 0
 
     @property
     def dropped_total(self) -> int:
         return self.dropped_non_positive + self.dropped_zero_volume + self.dropped_extreme_range
+
+
+# A single bad print inside an otherwise ordinary hour is the dominant
+# data-quality problem on busy pools: an MEV sandwich or a dust swap
+# executed far out of range sets the period's high or low, while the open
+# and close stay sane. On the Uniswap V4 ETH/USDC 0.01% pool roughly 9% of
+# hourly candles carry a wick like this, including one claiming ETH traded
+# between $4 and $2,446 in the same hour. Left in, a handful of them
+# stretch a chart's axis so far that all real price action flattens into a
+# line.
+#
+# These are clamped rather than dropped: the body is usually good data, so
+# discarding the whole period would throw away a real candle to remove a
+# bad wick.
+LOCAL_MEDIAN_WINDOW = 25
+MAX_DEVIATION_FROM_LOCAL_MEDIAN = 0.25
+
+
+def _local_median_closes(candles: list[Candle], window: int) -> list[float]:
+    """Centred rolling median of close, so a genuine trend isn't treated
+    as an outlier the way a single global median would treat it."""
+    closes = [c.close for c in candles]
+    half = max(1, window // 2)
+    medians: list[float] = []
+    for i in range(len(closes)):
+        lo = max(0, i - half)
+        hi = min(len(closes), i + half + 1)
+        medians.append(median(closes[lo:hi]))
+    return medians
+
+
+def clamp_outlier_wicks(
+    candles: list[Candle], max_deviation: float = MAX_DEVIATION_FROM_LOCAL_MEDIAN
+) -> tuple[list[Candle], int]:
+    """Pull absurd highs/lows back to a plausible band around local price.
+
+    Returns the repaired candles and how many were altered. A candle whose
+    *body* (open and close) also falls outside the band is left untouched —
+    that's a real move, not a bad print, and clamping it would fabricate
+    price action.
+    """
+    if len(candles) < 3:
+        return candles, 0
+
+    medians = _local_median_closes(candles, LOCAL_MEDIAN_WINDOW)
+    repaired: list[Candle] = []
+    clamped = 0
+
+    for candle, local in zip(candles, medians):
+        if local <= 0:
+            repaired.append(candle)
+            continue
+        upper = local * (1 + max_deviation)
+        lower = local * (1 - max_deviation)
+
+        # If the body itself is outside the band, price genuinely moved.
+        body_high, body_low = max(candle.open, candle.close), min(candle.open, candle.close)
+        if body_high > upper or body_low < lower:
+            repaired.append(candle)
+            continue
+
+        if candle.high <= upper and candle.low >= lower:
+            repaired.append(candle)
+            continue
+
+        repaired.append(
+            Candle(
+                timestamp=candle.timestamp,
+                open=candle.open,
+                high=min(candle.high, upper),
+                low=max(candle.low, lower),
+                close=candle.close,
+                volume_usd=candle.volume_usd,
+                trade_count=candle.trade_count,
+            )
+        )
+        clamped += 1
+
+    return repaired, clamped
 
 
 def sanitize_candles(candles: list[Candle]) -> tuple[list[Candle], SanitizeReport]:
@@ -204,8 +285,11 @@ def sanitize_candles(candles: list[Candle]) -> tuple[list[Candle], SanitizeRepor
             continue
         kept.append(candle)
 
+    kept, clamped = clamp_outlier_wicks(kept)
+
     return kept, SanitizeReport(
         kept=len(kept),
+        clamped_wicks=clamped,
         dropped_non_positive=non_positive,
         dropped_zero_volume=zero_volume,
         dropped_extreme_range=extreme,
