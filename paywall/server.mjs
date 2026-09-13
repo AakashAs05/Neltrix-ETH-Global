@@ -6,13 +6,15 @@
  * the x402 reference implementation is TypeScript.
  */
 
+import { pathToFileURL } from "node:url";
+
 import express from "express";
 import dotenv from "dotenv";
 import { HTTPFacilitatorClient } from "@x402/core/server";
 import { paymentMiddlewareFromConfig } from "@x402/express";
 import { ExactHederaScheme } from "@x402/hedera/exact/server";
 
-dotenv.config({ path: "../.env" });
+dotenv.config({ path: "../.env" });  // no-op in deployment, env comes from the platform
 
 const {
   HEDERA_NETWORK = "hedera:testnet",
@@ -145,12 +147,18 @@ app.get("/paywall/health", (_req, res) =>
 
 app.all("/{*any}", proxy);
 
-app.listen(PORT, () => {
-  console.log(`x402 paywall listening on http://127.0.0.1:${PORT}`);
-  console.log(`  paid       : ${PAID_ANALYSE}`);
-  console.log(`             : ${PAID_OHLCV} beyond range=${FREE_RANGE}`);
-  console.log(`  free tier  : GET /api/ohlcv?range=${FREE_RANGE}`);
-  console.log(`  price      : ${Number(X402_PRICE_TINYBARS) / 1e8} HBAR -> ${HEDERA_MERCHANT_ACCOUNT_ID}`);
-  console.log(`  network    : ${HEDERA_NETWORK} via ${X402_FACILITATOR_URL}`);
-  console.log(`  upstream   : ${UPSTREAM}`);
-});
+// Serverless platforms import this module and drive it themselves, so only
+// bind a port when the file is run directly. Vercel uses the default export.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  app.listen(PORT, () => {
+    console.log(`x402 paywall listening on http://127.0.0.1:${PORT}`);
+    console.log(`  paid       : ${PAID_ANALYSE}`);
+    console.log(`             : ${PAID_OHLCV} beyond range=${FREE_RANGE}`);
+    console.log(`  free tier  : GET /api/ohlcv?range=${FREE_RANGE}`);
+    console.log(`  price      : ${Number(X402_PRICE_TINYBARS) / 1e8} HBAR -> ${HEDERA_MERCHANT_ACCOUNT_ID}`);
+    console.log(`  network    : ${HEDERA_NETWORK} via ${X402_FACILITATOR_URL}`);
+    console.log(`  upstream   : ${UPSTREAM}`);
+  });
+}
+
+export default app;
