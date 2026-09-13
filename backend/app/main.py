@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -15,9 +17,21 @@ DEV_ORIGINS = [
     "http://127.0.0.1:3000",
 ]
 
+# Deployed frontends are added through ALLOWED_ORIGINS, comma separated.
+# Without this a browser on vercel.app gets blocked and every call fails.
+_extra = os.getenv("ALLOWED_ORIGINS", "")
+ALLOWED_ORIGINS = DEV_ORIGINS + [o.strip() for o in _extra.split(",") if o.strip()]
+
+# Vercel gives every branch and commit its own preview hostname, so listing
+# them one by one is not practical. The regex covers the whole account.
+PREVIEW_ORIGIN_REGEX = os.getenv(
+    "ALLOWED_ORIGIN_REGEX", r"https://.*\.vercel\.app"
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=DEV_ORIGINS,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=PREVIEW_ORIGIN_REGEX,
     allow_methods=["*"],
     allow_headers=["*"],
 )
