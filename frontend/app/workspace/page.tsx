@@ -3,8 +3,11 @@
 /** Protocol + pool picker. Uniswap V4 is the flagship source and is pinned first. */
 
 import Link from "next/link";
+import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 
+import { Skeleton } from "@/components/Skeleton";
+import { SiteNav } from "@/components/SiteNav";
 import { ApiError, fetchPools, fetchProtocols, formatUsd, shortenId } from "@/lib/api";
 import {
   INTERVALS,
@@ -69,11 +72,14 @@ export default function WorkspacePage() {
   }, [selectedProtocol]);
 
   return (
-    <main className="mx-auto w-full max-w-6xl px-6 py-10">
+    <>
+      <SiteNav />
+      <main className="mx-auto w-full max-w-6xl px-6 pb-20 pt-24">
       <header>
-        <h1 className="text-2xl font-semibold text-zinc-100">Neltrix Onchain</h1>
-        <p className="mt-1 text-sm text-zinc-400">
-          Pattern intelligence over DEX swap data, indexed by The Graph. Pick a pool to analyse.
+        <h1 className="text-3xl font-semibold tracking-tight text-zinc-50">Workspace</h1>
+        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-400">
+          Live pools on Ethereum mainnet, indexed by The Graph. Choose a venue, a candle
+          interval and how far back to look, then pick a pool to analyse.
         </p>
       </header>
 
@@ -184,13 +190,22 @@ export default function WorkspacePage() {
         )}
 
         {loadingPools && (
-          <p className="mt-3 text-sm text-zinc-500">Loading pools from The Graph…</p>
+          <div className="mt-3 space-y-px overflow-hidden rounded-lg border border-zinc-800">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-[62px] w-full rounded-none" />
+            ))}
+          </div>
         )}
 
         {!loadingPools && !error && pools.length > 0 && (
           <ul className="mt-3 divide-y divide-zinc-900 overflow-hidden rounded-lg border border-zinc-800">
-            {pools.map((pool) => (
-              <li key={pool.id}>
+            {pools.map((pool, i) => (
+              <motion.li
+                key={pool.id}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.35, delay: Math.min(i * 0.035, 0.4) }}
+              >
                 <Link
                   href={{
                     pathname: "/workspace/analysis",
@@ -201,10 +216,10 @@ export default function WorkspacePage() {
                       range,
                     },
                   }}
-                  className="flex flex-wrap items-center justify-between gap-3 bg-zinc-950 px-4 py-3 transition-colors hover:bg-zinc-900"
+                  className="group flex flex-wrap items-center justify-between gap-3 bg-zinc-950 px-4 py-3.5 transition-colors hover:bg-zinc-900/80"
                 >
                   <div className="min-w-0">
-                    <p className="text-sm text-zinc-100">{pool.name}</p>
+                    <p className="text-sm text-zinc-100 transition-colors group-hover:text-white">{pool.name}</p>
                     <p className="mt-0.5 font-mono text-[11px] text-zinc-500">
                       {shortenId(pool.id)}
                     </p>
@@ -224,7 +239,7 @@ export default function WorkspacePage() {
                         }`}
                         title={
                           pool.total_value_locked_usd < 0
-                            ? "The subgraph reports a negative TVL for this pool — a known data-quality issue in the V4 deployment, not a computation here."
+                            ? "The subgraph reports a negative TVL for this pool. That is a known data-quality issue in the V4 deployment, not a computation here."
                             : undefined
                         }
                       >
@@ -233,19 +248,20 @@ export default function WorkspacePage() {
                     </div>
                   </div>
                 </Link>
-              </li>
+              </motion.li>
             ))}
           </ul>
         )}
       </section>
-    </main>
+      </main>
+    </>
   );
 }
 
 function describe(error: unknown): string {
   if (error instanceof ApiError) return error.message;
   if (error instanceof Error) {
-    return `${error.message} — is the backend running on ${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"}?`;
+    return `${error.message}. Is the backend running on ${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"}?`;
   }
   return "Unexpected error.";
 }

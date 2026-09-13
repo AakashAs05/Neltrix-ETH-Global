@@ -1,17 +1,7 @@
-"""Wraps calls to The Graph's Subgraph MCP server for natural-language queries.
+"""Typed entry point for The Graph's Subgraph MCP server.
 
-This is deliberately separate from graph_client.py / standardized_query.py,
-which power the core `/api/ohlcv` and `/api/analyse` pipeline directly
-against the gateway (fast, deterministic, easy to test). Subgraph MCP is
-used specifically for the natural-language surface described in the plan,
-e.g. an agent asking "show me bearish patterns forming on ETH/USDC pools
-across DEXs", where translating free text into a GraphQL query is the
-actual value MCP adds.
-
-Not wired into the core pipeline: MCP tool calls in this codebase are made
-by an MCP-aware agent/client (see agent/), not by this FastAPI service
-calling itself. This module documents the shape that integration takes and
-gives the agent a typed entry point.
+Separate from the core pipeline, which queries the gateway directly. MCP is
+for the natural-language surface, called by an MCP-aware agent.
 """
 
 from __future__ import annotations

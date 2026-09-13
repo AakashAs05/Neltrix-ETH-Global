@@ -1,8 +1,5 @@
-/**
- * Mirrors the Pydantic response models in backend/app/api/schemas.py and
- * routes_analyse.py. Kept hand-written rather than generated so the shapes
- * stay readable; if the backend models change, change these too.
- */
+/** Mirrors the Pydantic models in backend/app/api/. Hand-written, so if the
+ *  backend shapes change these need changing too. */
 
 export type Direction = "bullish" | "bearish" | "neutral";
 export type PatternCategory = "candlestick" | "classic" | "harmonic";
@@ -62,12 +59,8 @@ export interface Verdict {
   pattern_count: number;
 }
 
-/**
- * Where the candles came from. "subgraph-aggregate" means the subgraph
- * published real OHLC (cheap, covers long ranges); "derived-from-swaps"
- * means they were rebuilt from individual swap events (works everywhere,
- * but the cost scales with how busy the pool is).
- */
+/** Published OHLC is cheap and covers long ranges. Swap replay works
+ *  everywhere but costs more the busier the pool is. */
 export type CandleSource = "subgraph-aggregate" | "derived-from-swaps";
 
 export interface SeriesMeta {
@@ -130,12 +123,8 @@ export const RANGE_LABELS: Record<Range, string> = {
   "1y": "1 year",
 };
 
-/**
- * Which interval/range pairs the backend can serve from published OHLC
- * aggregates rather than by replaying swaps. Mirrors AGGREGATE_PLAN in
- * backend/app/graph/candle_source.py — used only to warn the user up
- * front that a combination will be slow or truncated.
- */
+/** Mirrors AGGREGATE_PLAN in candle_source.py, used only to warn up front
+ *  when a combination will be slow or truncated. */
 const AGGREGATE_INTERVALS: string[] = ["1h", "4h", "1d"];
 const LONG_RANGES: string[] = ["1m", "3m", "1y"];
 

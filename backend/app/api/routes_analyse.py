@@ -1,4 +1,4 @@
-"""POST /api/analyse — fetch, detect patterns, score a verdict, explain it."""
+"""POST /api/analyse, fetch, detect patterns, score a verdict, explain it."""
 
 from __future__ import annotations
 

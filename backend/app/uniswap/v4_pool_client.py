@@ -1,36 +1,8 @@
-"""Uniswap V4 — the flagship pool source, on Uniswap's own native schema.
+"""Uniswap V4, on Uniswap's own schema rather than Messari's.
 
-Unlike Uniswap V3 and SushiSwap (both published by Messari as "dex-amm"
-Standardized Subgraphs — see app/graph/standardized_query.py), Uniswap V4
-has no Messari standardized deployment: V4's singleton `PoolManager` +
-hooks architecture doesn't map onto the existing dex-amm schema, and
-Messari hasn't published one for it. Verified on 2026-09-10 against both
-Messari's deployment registry and The Graph's explorer.
-
-So V4 is queried through its own native schema instead:
-
-    Pool  { id, token0, token1, feeTier, volumeUSD, txCount, ... }
-    Swap  { timestamp, amount0, amount1, amountUSD, sqrtPriceX96, tick }
-
-The important design point: `_normalize_swap()` converts that native shape
-into the *same* intermediate dict `standardized_query.get_recent_swaps()`
-returns for Messari subgraphs. Everything downstream — candle_builder, all
-three pattern detectors, signals, the explainer, /api/analyse — then runs
-on Uniswap V4 data completely unmodified. The engine never learns that a
-second schema exists; only this adapter knows.
-
-Subgraph: DiYPVdygkfjDWhbxGSqAQxwBKmfKnkWQojqeM2rkLb3G (Ethereum mainnet),
-the V4 mainnet deployment published in Uniswap's own developer docs. Note
-that Uniswap's docs explicitly caveat these example deployments as "not
-official deployments and may not be actively maintained by Uniswap Labs" —
-see docs/FEEDBACK.md, where that's part of the feedback submitted.
-
-Data-quality caveat found while integrating: a number of V4 pools report
-nonsensical `totalValueLockedUSD` (wildly inflated, and in several cases
-negative — e.g. the top USDC/USDT pool by volume reports roughly
--$24.7M TVL). V4 lets anyone open a pool with arbitrary hooks, so the junk
-ratio is higher than V3's. get_top_pools() therefore ranks by volumeUSD and
-filters to major tokens rather than trusting TVL.
+No Messari dex-amm deployment exists for V4, so this speaks the native
+schema and normalizes swaps into the same shape the Messari path returns.
+Everything downstream then runs on V4 unmodified.
 """
 
 from __future__ import annotations
@@ -50,13 +22,11 @@ SUBGRAPH_ID = os.getenv(
     "UNISWAP_V4_ETHEREUM_SUBGRAPH_ID", "DiYPVdygkfjDWhbxGSqAQxwBKmfKnkWQojqeM2rkLb3G"
 )
 
-# The Graph caps `first` at 1000 per query — same constraint, same
-# pagination strategy as app/graph/standardized_query.py.
+# The Graph caps `first` at 1000 per query, same as the Messari path.
 MAX_PAGE_SIZE = 1000
 
-# Ranking "top pools" on V4 needs a token allowlist: the deployment is full
-# of wash-traded pairs (ETH/"1xETH" claiming $2.3T TVL, etc.) that would
-# otherwise dominate every ordering.
+# Ranking needs a token allowlist. Wash-traded pairs claiming trillions in
+# TVL would otherwise dominate every ordering.
 MAJOR_SYMBOLS = ["ETH", "WETH", "USDC", "USDT", "DAI", "WBTC"]
 
 _STABLECOIN_SYMBOLS = {"USDC", "USDT", "USD", "DAI", "BUSD", "TUSD", "USDP", "FRAX", "LUSD", "GUSD"}
@@ -108,9 +78,8 @@ _SWAP_FIELDS = """
 def _build_swaps_query(*, with_cursor: bool, with_since: bool) -> str:
     """Assemble the swaps query for the filters actually in play.
 
-    graph-node rejects a null `timestamp_lte`/`timestamp_gte`, so an
-    unused bound can't just be passed as a null variable — the clause has
-    to be absent from the query text entirely.
+    graph-node rejects a null timestamp bound, so an unused one has to be
+    absent from the query text rather than passed as null.
     """
     declarations = ["$pool: String!", "$first: Int!"]
     filters = ["pool: $pool"]
@@ -135,22 +104,12 @@ query RecentV4Swaps({", ".join(declarations)}) {{
 """
 
 
-# --- Pre-aggregated OHLC ---------------------------------------------------
-# Unlike Messari's dex-amm schema, Uniswap's own schema publishes real
-# open/high/low/close per hour and per day. That's what makes long ranges
-# (a month, a year) affordable here: 365 daily rows instead of millions of
-# swap events.
-#
-# Orientation matters and is easy to get wrong: these OHLC values track
-# `token0Price`, which is token0-per-token1 — i.e. the price of *token1*
-# denominated in token0. On the ETH/USDC pool (token0=ETH, token1=USDC)
-# that reads as ~0.000406 ETH per USDC, so charting ETH means inverting.
-# Inverting also swaps the roles of high and low, which is handled in
-# _aggregate_rows_to_candles.
+# Uniswap's schema publishes real OHLC per hour and day, which is what makes
+# long ranges affordable: 365 daily rows instead of millions of swaps.
+# These track token0Price, so charting token0 means inverting (see below).
 
-# Note the time fields here are `Int`, not the `BigInt` that Swap.timestamp
-# uses — declaring these as BigInt makes graph-node reject the whole
-# `where` object rather than complain about the specific argument.
+# These time fields are Int, not the BigInt that Swap.timestamp uses.
+# Declaring them BigInt makes graph-node reject the whole where object.
 HOUR_CANDLES_QUERY = """
 query V4HourCandles($pool: String!, $first: Int!, $since: Int!, $before: Int!) {
   poolHourDatas(
@@ -190,20 +149,18 @@ query V4DayCandles($pool: String!, $first: Int!, $since: Int!, $before: Int!) {
 """
 
 
-# V4 flags a dynamic-fee pool by setting the top bit of the fee field
-# (0x800000) rather than storing a real rate there, so it has to be
-# special-cased — formatted naively it reads as an absurd "838.86%".
+# V4 flags a dynamic-fee pool with the top bit of the fee field rather than
+# a real rate. Formatted naively it reads as an absurd "838.86%".
 DYNAMIC_FEE_FLAG = 0x800000
 
 
 def get_pool_display_name(pool: dict[str, Any]) -> str:
-    """V4 pools have no `name` field (V4 pool ids are bytes32 hashes, not
-    contract addresses), so build a readable one the way the UI needs it."""
+    """V4 pool ids are bytes32 hashes with no name field, so compose one."""
     fee_tier = int(pool["feeTier"])
     pair = f"{pool['token0']['symbol']}/{pool['token1']['symbol']}"
     if fee_tier == DYNAMIC_FEE_FLAG:
         return f"Uniswap V4 {pair} (dynamic fee)"
-    # `:g` keeps V4's very small tiers legible — 10 -> 0.001%, not "0.00%".
+    # `:g` keeps V4's tiny fee tiers legible: 10 becomes 0.001%, not 0.00%.
     return f"Uniswap V4 {pair} {fee_tier / 10_000:g}%"
 
 
@@ -224,8 +181,7 @@ def get_pool_info(pool_id: str) -> dict[str, Any]:
 
 
 def infer_base_symbol(pool_id: str) -> str:
-    """Which side of the pair to price in USD. Mirrors the Messari-path
-    heuristic in standardized_query.infer_base_symbol."""
+    """Which side of the pair to price. Mirrors the Messari-path heuristic."""
     pool = get_pool_info(pool_id)
     symbols = [pool["token0"]["symbol"], pool["token1"]["symbol"]]
     non_stable = [s for s in symbols if s not in _STABLECOIN_SYMBOLS]
@@ -233,19 +189,17 @@ def infer_base_symbol(pool_id: str) -> str:
 
 
 def _to_raw_units(amount: Decimal, decimals: int) -> str:
-    """V4 reports amounts as already-scaled BigDecimals ("0.5230024177...")
-    while the Messari schema reports raw integer units plus a `decimals`
-    field. candle_builder expects the latter, so scale back up — via Decimal
-    rather than float, so 18-decimal amounts stay exact."""
+    """V4 reports scaled decimals; candle_builder expects raw integer units.
+
+    Scaled via Decimal rather than float so 18-decimal amounts stay exact.
+    """
     return str(int(amount * (Decimal(10) ** int(decimals))))
 
 
 def _normalize_swap(raw: dict[str, Any]) -> dict[str, Any] | None:
-    """Uniswap V4's {amount0, amount1, amountUSD} -> the
-    {tokenIn/tokenOut, amountIn/amountOut} shape candle_builder consumes.
+    """Convert V4's signed amounts into the shape candle_builder consumes.
 
-    Sign convention: a negative amount means that token left the pool (the
-    trader bought it); positive means it went in. Swaps where both sides
+    A negative amount means that token left the pool. Swaps where both sides
     share a sign are degenerate and get skipped rather than guessed at.
     """
     token0 = raw["pool"]["token0"]
@@ -262,9 +216,8 @@ def _normalize_swap(raw: dict[str, Any]) -> dict[str, Any] | None:
     else:
         return None
 
-    # V4 reports one USD value for the whole swap; the Messari schema
-    # carries a per-side value. They're within fees/slippage of each other
-    # there, so using the single value for both sides is consistent.
+    # V4 reports one USD value per swap where Messari carries a per-side
+    # value. They agree within fees, so reusing it on both sides is fine.
     usd = str(abs(Decimal(raw["amountUSD"])))
 
     return {
@@ -282,16 +235,10 @@ def _normalize_swap(raw: dict[str, Any]) -> dict[str, Any] | None:
 def get_recent_swaps(
     pool_id: str, limit: int = 1000, since: int | None = None
 ) -> list[dict[str, Any]]:
-    """Recent swaps for one V4 pool, newest first, already normalized to
-    the shared candle_builder input shape.
+    """Recent swaps for one V4 pool, normalized to candle_builder's shape.
 
-    Same cursor-pagination strategy as the Messari path: page on
-    `timestamp_lte` and dedupe by id, since many swaps share a block's
-    timestamp and a strict `timestamp_lt` cursor would silently drop the
-    ones sitting on the page boundary. `since` bounds how far back to
-    walk; `limit` still caps the total, so a caller asking for a long
-    range on a busy pool gets a truncated (but clearly reported) window
-    rather than an unbounded crawl.
+    Same cursor pagination as the Messari path: page on `timestamp_lte` and
+    dedupe by id. `since` bounds the walk, `limit` caps it.
     """
     client = get_client()
     pool_id = pool_id.lower()
@@ -301,10 +248,8 @@ def get_recent_swaps(
     cursor: int | None = None
 
     while len(collected) < limit:
-        # Full pages every time — see the matching note in
-        # standardized_query.get_recent_swaps: shrinking the page to the
-        # remaining shortfall degenerates into 1-row requests that return
-        # only already-seen rows, stalling one short of the ceiling.
+        # Full pages only. Shrinking to the shortfall degenerates into
+        # 1-row requests that return duplicates and stall short of the ceiling.
         page_size = MAX_PAGE_SIZE
         variables: dict[str, Any] = {"pool": pool_id, "first": page_size}
         if cursor is not None:
@@ -343,14 +288,10 @@ def get_recent_swaps(
 def _aggregate_rows_to_candles(
     rows: list[dict[str, Any]], time_field: str, invert: bool
 ) -> list[Candle]:
-    """Turn poolHourDatas/poolDayDatas rows into Candles.
+    """Turn published hourly/daily rows into Candles.
 
-    When `invert` is set, every price is flipped to the other side of the
-    pair — which means the row's `high` becomes the *low* and vice versa.
-    Rather than track that by hand, high and low are re-derived as the max
-    and min of all four converted values, which also repairs rows whose
-    published OHLC is internally inconsistent (the V4 deployment has
-    some, particularly around pool creation).
+    Inverting flips high and low, so both are re-derived as the max and min
+    of the four converted values. That also repairs inconsistent rows.
     """
     candles: list[Candle] = []
     for row in rows:
@@ -360,8 +301,7 @@ def _aggregate_rows_to_candles(
             continue
         if invert:
             if any(value <= 0 for value in values):
-                # Can't invert through zero; sanitize_candles drops these.
-                continue
+                continue  # can't invert through zero; sanitize drops these
             values = [1.0 / value for value in values]
 
         open_, high, low, close = values[0], values[1], values[2], values[3]
@@ -383,12 +323,10 @@ def _aggregate_rows_to_candles(
 def get_aggregate_candles(
     pool_id: str, base_symbol: str, granularity: str, since: int, until: int
 ) -> tuple[list[Candle], str]:
-    """Pre-aggregated OHLC straight from the subgraph.
+    """Pre-aggregated OHLC straight from the subgraph, hourly or daily.
 
-    `granularity` is "1h" or "1d" — the two the schema actually publishes.
-    Returns the candles plus the symbol the price is denominated in (the
-    other side of the pair), because unlike the swap path these prices are
-    quoted in the paired token rather than in USD.
+    Also returns the symbol the price is quoted in, since unlike the swap
+    path these are denominated in the paired token rather than USD.
     """
     if granularity not in ("1h", "1d"):
         raise ValueError(f"No published aggregate for '{granularity}' (only 1h and 1d)")
@@ -413,8 +351,8 @@ def get_aggregate_candles(
     collected: list[dict[str, Any]] = []
     cursor = until
 
-    # Page backwards through the window; each row is one period, so a year
-    # of hourly data is ~9 pages and a year of daily is a single page.
+    # Page backwards through the window. A year of hourly is about 9 pages,
+    # a year of daily is one.
     while True:
         data = client.query(
             SUBGRAPH_ID,

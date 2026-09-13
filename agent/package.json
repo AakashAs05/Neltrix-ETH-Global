@@ -1,0 +1,20 @@
+{
+  "name": "neltrix-agent",
+  "version": "1.0.0",
+  "description": "Agent that discovers the x402-priced Neltrix endpoint, pays on Hedera, and consumes the analysis",
+  "scripts": {
+    "start": "node pay_and_analyse.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@hiero-ledger/sdk": "^2.88.0",
+    "@x402/core": "^2.25.0",
+    "@x402/express": "^2.25.0",
+    "@x402/hedera": "^2.25.0",
+    "dotenv": "^17.4.2"
+  },
+  "private": true
+}

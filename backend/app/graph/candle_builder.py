@@ -1,24 +1,14 @@
 """Turns raw swap events into OHLCV candles.
 
-Messari's standardized DEX schema (see standardized_query.py) does not
-ship pre-built price candles - `LiquidityPool` exposes cumulative
-volume/TVL/fee metrics, not open/high/low/close. What it does give us is
-every individual `Swap`, each carrying enough information to derive an
-instantaneous price:
-
-    amountIn, amountInUSD, tokenIn { symbol, decimals }
-    amountOut, amountOutUSD, tokenOut { symbol, decimals }
-
-For a chosen "base" token (e.g. WETH in a USDC/WETH pool), each swap gives
-one price sample, base-token value in USD, regardless of which side of
-the pair was bought or sold. This module buckets those samples into fixed
-time windows and reduces each bucket to an OHLCV candle, the same shape
-Neltrix's pattern-detection engine expects.
+The Messari schema ships no price candles, only cumulative volume and TVL.
+Each swap does carry enough to derive one price sample, so this buckets
+those samples by time and reduces each bucket to a candle.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from statistics import median
 
 INTERVAL_SECONDS = {
     "5m": 300,
@@ -28,8 +18,7 @@ INTERVAL_SECONDS = {
     "1d": 86400,
 }
 
-# How far back a request can ask for. Which of these is actually cheap
-# depends on the source — see graph/candle_source.py.
+# How far back a request can ask for. Which are cheap depends on the source.
 RANGE_SECONDS = {
     "1d": 86_400,
     "1w": 604_800,
@@ -55,9 +44,10 @@ def _raw_amount_to_human(raw_amount: str | int, decimals: int) -> float:
 
 
 def _swap_price_and_volume(swap: dict, base_symbol: str) -> tuple[float, float] | None:
-    """Return (price of base_symbol in USD, USD volume of the swap), or
-    None if this swap doesn't involve base_symbol at all (shouldn't happen
-    for a well-formed pool query, but we guard against dirty data).
+    """Price of base_symbol in USD plus the swap's USD volume.
+
+    None when the swap doesn't involve base_symbol, which only happens on
+    dirty data but is cheap to guard against.
     """
     token_in = swap["tokenIn"]
     token_out = swap["tokenOut"]
@@ -75,9 +65,7 @@ def _swap_price_and_volume(swap: dict, base_symbol: str) -> tuple[float, float] 
         return None
 
     price = usd / amount
-    # Volume is the USD value that changed hands in this swap; amountInUSD
-    # and amountOutUSD are usually near-identical (fee/slippage aside), so
-    # either side is a reasonable proxy for trade size.
+    # Either USD side works as trade size; they agree within fees.
     volume = float(swap["amountInUSD"])
     return price, volume
 
@@ -90,8 +78,7 @@ def build_ohlcv(swaps: list[dict], base_symbol: str, interval: str = "1h") -> li
         raise ValueError(f"Unknown interval '{interval}'. Choose from {list(INTERVAL_SECONDS)}")
     bucket_width = INTERVAL_SECONDS[interval]
 
-    # swaps arrive newest-first from the query; process oldest-first so
-    # open/close land on the right ends of each bucket.
+    # Queries return newest first, so reverse to get open/close right.
     ordered = sorted(swaps, key=lambda s: int(s["timestamp"]))
 
     buckets: dict[int, list[tuple[float, float]]] = {}
@@ -121,11 +108,10 @@ def build_ohlcv(swaps: list[dict], base_symbol: str, interval: str = "1h") -> li
 
 
 def resample(candles: list[Candle], interval: str) -> list[Candle]:
-    """Roll finer candles up into wider ones (e.g. hourly -> 4h).
+    """Roll finer candles up into wider ones, e.g. hourly into 4h.
 
-    Only ever used to go coarser: a subgraph publishes hourly and daily
-    aggregates, so a 4h request is served by rolling up 4 hourly candles
-    rather than replaying every swap in the window.
+    Only ever goes coarser. A 4h request rolls up four published hourly
+    candles instead of replaying every swap in the window.
     """
     if interval not in INTERVAL_SECONDS:
         raise ValueError(f"Unknown interval '{interval}'. Choose from {list(INTERVAL_SECONDS)}")
@@ -150,10 +136,8 @@ def resample(candles: list[Candle], interval: str) -> list[Candle]:
     ]
 
 
-# A single candle spanning more than this ratio between its high and low
-# is an indexing artifact, not price action. Pool-creation rows are the
-# usual culprit: they record a dust initialization price alongside a real
-# one, which after inversion reads as a 100,000x wick.
+# A high/low ratio beyond this is an indexing artifact, not price action.
+# Pool-creation rows are the usual culprit.
 MAX_CANDLE_HIGH_LOW_RATIO = 20.0
 
 
@@ -163,30 +147,86 @@ class SanitizeReport:
     dropped_non_positive: int
     dropped_zero_volume: int
     dropped_extreme_range: int
+    clamped_wicks: int = 0
 
     @property
     def dropped_total(self) -> int:
         return self.dropped_non_positive + self.dropped_zero_volume + self.dropped_extreme_range
 
 
+# One bad print sets a period's high or low while open and close stay sane.
+# About 9% of hourly candles on the V4 ETH/USDC 0.01% pool look like this.
+# Clamped rather than dropped, since the body is usually fine.
+LOCAL_MEDIAN_WINDOW = 25
+MAX_DEVIATION_FROM_LOCAL_MEDIAN = 0.25
+
+
+def _local_median_closes(candles: list[Candle], window: int) -> list[float]:
+    """Centred rolling median of close, so a real trend isn't read as an outlier."""
+    closes = [c.close for c in candles]
+    half = max(1, window // 2)
+    medians: list[float] = []
+    for i in range(len(closes)):
+        lo = max(0, i - half)
+        hi = min(len(closes), i + half + 1)
+        medians.append(median(closes[lo:hi]))
+    return medians
+
+
+def clamp_outlier_wicks(
+    candles: list[Candle], max_deviation: float = MAX_DEVIATION_FROM_LOCAL_MEDIAN
+) -> tuple[list[Candle], int]:
+    """Pull absurd highs and lows back to a band around local price.
+
+    A candle whose body is also outside the band is left alone. That is a
+    real move, and clamping it would fabricate price action.
+    """
+    if len(candles) < 3:
+        return candles, 0
+
+    medians = _local_median_closes(candles, LOCAL_MEDIAN_WINDOW)
+    repaired: list[Candle] = []
+    clamped = 0
+
+    for candle, local in zip(candles, medians):
+        if local <= 0:
+            repaired.append(candle)
+            continue
+        upper = local * (1 + max_deviation)
+        lower = local * (1 - max_deviation)
+
+        # If the body itself is outside the band, price genuinely moved.
+        body_high, body_low = max(candle.open, candle.close), min(candle.open, candle.close)
+        if body_high > upper or body_low < lower:
+            repaired.append(candle)
+            continue
+
+        if candle.high <= upper and candle.low >= lower:
+            repaired.append(candle)
+            continue
+
+        repaired.append(
+            Candle(
+                timestamp=candle.timestamp,
+                open=candle.open,
+                high=min(candle.high, upper),
+                low=max(candle.low, lower),
+                close=candle.close,
+                volume_usd=candle.volume_usd,
+                trade_count=candle.trade_count,
+            )
+        )
+        clamped += 1
+
+    return repaired, clamped
+
+
 def sanitize_candles(candles: list[Candle]) -> tuple[list[Candle], SanitizeReport]:
     """Drop candles that carry no usable price information.
 
-    Subgraph-published aggregates are not clean. On the Uniswap V4
-    ETH/USDC pool, the two rows at pool creation (2025-01-23/24) record a
-    ~3.3e-21 price with zero volume, which inverts to roughly $3e20 — one
-    of those in a series is enough to collapse every real candle onto a
-    flat line once the chart autoscales.
-
-    The rules are deliberately asset-agnostic — no hardcoded price bands,
-    since the same code charts ETH, WBTC and whatever else a pool holds:
-
-      1. any non-positive OHLC value is structurally invalid
-      2. zero traded volume means no price was discovered in the period
-      3. a high/low ratio beyond MAX_CANDLE_HIGH_LOW_RATIO is an artifact
-
-    Counts come back in the report rather than being swallowed, so the API
-    can tell the caller what was removed instead of quietly reshaping data.
+    Rules are asset-agnostic, so no hardcoded price bands: non-positive OHLC
+    is invalid, zero volume means no price was discovered, and an extreme
+    high/low ratio is an artifact. Counts are reported, never swallowed.
     """
     kept: list[Candle] = []
     non_positive = zero_volume = extreme = 0
@@ -204,8 +244,11 @@ def sanitize_candles(candles: list[Candle]) -> tuple[list[Candle], SanitizeRepor
             continue
         kept.append(candle)
 
+    kept, clamped = clamp_outlier_wicks(kept)
+
     return kept, SanitizeReport(
         kept=len(kept),
+        clamped_wicks=clamped,
         dropped_non_positive=non_positive,
         dropped_zero_volume=zero_volume,
         dropped_extreme_range=extreme,

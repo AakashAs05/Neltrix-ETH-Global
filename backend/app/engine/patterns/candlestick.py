@@ -1,8 +1,7 @@
-"""Single- and multi-candle (1-3 candle) reversal/continuation patterns.
+"""Single and multi-candle reversal shapes.
 
-These are the shortest-horizon, noisiest signals in the engine (see the
-category weights in engine/signals.py) — useful as corroborating evidence,
-not as a verdict on their own.
+The noisiest signals in the engine, weighted lowest in signals.py. Useful
+as corroboration, not as a verdict on their own.
 """
 
 from __future__ import annotations
@@ -13,19 +12,15 @@ from . import BEARISH, BULLISH, NEUTRAL, PatternMatch
 
 TREND_LOOKBACK = 3
 
-# A two-candle pattern is a reaction to a decisive prior move, so the
-# prior candle has to have actually made one: its body must be at least
-# this fraction of its own range, otherwise it was indecision and there is
-# nothing to reverse.
+# A two-candle pattern reacts to a decisive prior move, so the prior candle
+# has to have made one. Otherwise it was indecision, with nothing to reverse.
 DECISIVE_BODY_RATIO = 0.5
 
-# The inside candle of a Harami must be *much* smaller than the one it
-# sits inside — that contraction is the signal. Merely "smaller" matches
-# ordinary chop.
+# The inside candle must be much smaller than the one it sits in. That
+# contraction is the signal; merely smaller matches ordinary chop.
 HARAMI_BODY_RATIO = 0.5
 
-# Likewise an engulfing candle should clearly overpower the previous body,
-# not exceed it by a fraction of a percent.
+# An engulfing candle should clearly overpower the previous body.
 ENGULF_BODY_MULTIPLE = 1.3
 
 
@@ -54,9 +49,7 @@ def _is_bearish(c: Candle) -> bool:
 
 
 def _prior_trend(candles: list[Candle], i: int, lookback: int = TREND_LOOKBACK) -> str:
-    """Cheap trend context for patterns whose meaning depends on it (a
-    hammer only means something after a decline; the same shape after a
-    rally is a hanging man)."""
+    """Trend context, since a hammer after a decline is a hanging man after a rally."""
     if i < lookback:
         return NEUTRAL
     start_close = candles[i - lookback].close
@@ -96,19 +89,15 @@ def detect(candles: list[Candle]) -> list[PatternMatch]:
         lower = _lower_wick(c)
         trend = _prior_trend(candles, i)
 
-        # Doji: open ~= close relative to the candle's range. Checked first
-        # and made exclusive of the Hammer family below: when body is this
-        # small, `lower >= 2 * body` is nearly always true regardless of
-        # wick shape, so without this guard almost every Doji also got
-        # labeled Hammer/Hanging Man/Shooting Star — contradictory
-        # classifications on the same candle (a Doji is defined by having
-        # no dominant wick direction; a Hammer is defined by having one).
+        # Checked first and made exclusive of the Hammer family. With a body
+        # this small, `lower >= 2 * body` is nearly always true, so without
+        # the guard almost every Doji was also labelled a Hammer.
         is_doji = body <= 0.1 * rng
         if is_doji:
             matches.append(
                 _match(
                     "Doji", NEUTRAL, 0.5 + 0.3 * (1 - body / rng), candles, i, i,
-                    f"Open and close nearly equal (${c.open:.4f} vs ${c.close:.4f}) — indecision.",
+                    f"Open and close nearly equal (${c.open:.4f} vs ${c.close:.4f}), indecision.",
                 )
             )
 
@@ -119,14 +108,14 @@ def detect(candles: list[Candle]) -> list[PatternMatch]:
                 matches.append(
                     _match(
                         "Hammer", BULLISH, confidence, candles, i, i,
-                        f"Long lower wick (${lower:.4f}) after a decline — buyers rejected lower prices.",
+                        f"Long lower wick (${lower:.4f}) after a decline, buyers rejected lower prices.",
                     )
                 )
             elif trend == BULLISH:
                 matches.append(
                     _match(
                         "Hanging Man", BEARISH, confidence * 0.8, candles, i, i,
-                        f"Long lower wick (${lower:.4f}) after a rally — possible exhaustion.",
+                        f"Long lower wick (${lower:.4f}) after a rally, possible exhaustion.",
                     )
                 )
 
@@ -137,14 +126,14 @@ def detect(candles: list[Candle]) -> list[PatternMatch]:
                 matches.append(
                     _match(
                         "Inverted Hammer", BULLISH, confidence * 0.8, candles, i, i,
-                        f"Long upper wick (${upper:.4f}) after a decline — buyers tested higher prices.",
+                        f"Long upper wick (${upper:.4f}) after a decline, buyers tested higher prices.",
                     )
                 )
             elif trend == BULLISH:
                 matches.append(
                     _match(
                         "Shooting Star", BEARISH, confidence, candles, i, i,
-                        f"Long upper wick (${upper:.4f}) after a rally — sellers rejected higher prices.",
+                        f"Long upper wick (${upper:.4f}) after a rally, sellers rejected higher prices.",
                     )
                 )
 
@@ -154,50 +143,44 @@ def detect(candles: list[Candle]) -> list[PatternMatch]:
         prev_body = _body(prev)
 
         prev_range = _range(prev)
-        # Both Engulfing and Harami describe a *reaction* to a decisive
-        # prior move. Without requiring that the prior candle actually made
-        # one, the two-candle checks fire on ordinary chop: any alternating
-        # pair of candles trivially satisfies "one body is bigger than the
-        # other", which is why Bearish Harami alone was matching 17% of all
-        # candles before this guard.
+        # Without this guard the two-candle checks fire on ordinary chop:
+        # Bearish Harami alone matched 17% of all candles.
         prev_decisive = prev_range > 0 and prev_body >= DECISIVE_BODY_RATIO * prev_range
 
-        # Engulfing: current body fully engulfs the previous body, opposite
-        # colors, and does so convincingly rather than by a rounding error.
+        # Engulfs the previous body, opposite colours, and convincingly so.
         engulfs_convincingly = body >= ENGULF_BODY_MULTIPLE * prev_body
         if prev_decisive and engulfs_convincingly:
             if _is_bearish(prev) and _is_bullish(c) and c.open <= prev.close and c.close >= prev.open:
                 matches.append(
                     _match(
                         "Bullish Engulfing", BULLISH, min(1.0, body / max(prev_body, 1e-9) / 3), candles, i - 1, i,
-                        f"${c.close:.4f} close engulfs the prior red candle's body — buyers took control.",
+                        f"${c.close:.4f} close engulfs the prior red candle's body, buyers took control.",
                     )
                 )
             if _is_bullish(prev) and _is_bearish(c) and c.open >= prev.close and c.close <= prev.open:
                 matches.append(
                     _match(
                         "Bearish Engulfing", BEARISH, min(1.0, body / max(prev_body, 1e-9) / 3), candles, i - 1, i,
-                        f"${c.close:.4f} close engulfs the prior green candle's body — sellers took control.",
+                        f"${c.close:.4f} close engulfs the prior green candle's body, sellers took control.",
                     )
                 )
 
-        # Harami: current body contained within the previous (much larger)
-        # body. "Much larger" is the point of the pattern — momentum
-        # stalling — so a body merely a hair smaller doesn't qualify.
+        # Body contained within the previous, much larger one. That
+        # contraction is the signal, so a hair smaller does not qualify.
         is_inside_and_small = body <= HARAMI_BODY_RATIO * prev_body
         if prev_decisive and is_inside_and_small:
             if _is_bearish(prev) and _is_bullish(c) and prev.close <= c.open and c.close <= prev.open:
                 matches.append(
                     _match(
                         "Bullish Harami", BULLISH, min(1.0, 1 - body / max(prev_body, 1e-9)), candles, i - 1, i,
-                        "Small green body tucked inside the prior red candle — downside momentum stalling.",
+                        "Small green body tucked inside the prior red candle, downside momentum stalling.",
                     )
                 )
             if _is_bullish(prev) and _is_bearish(c) and prev.open <= c.open and c.close <= prev.close:
                 matches.append(
                     _match(
                         "Bearish Harami", BEARISH, min(1.0, 1 - body / max(prev_body, 1e-9)), candles, i - 1, i,
-                        "Small red body tucked inside the prior green candle — upside momentum stalling.",
+                        "Small red body tucked inside the prior green candle, upside momentum stalling.",
                     )
             )
 

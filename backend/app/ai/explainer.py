@@ -1,13 +1,7 @@
-"""Turns a Verdict into a plain-English explanation.
+"""Turns a Verdict into plain English.
 
-Grounded, verdict-only context: this module never sees the raw candle
-series, only the already-computed Verdict, the PatternMatch objects that
-fed into it, and the support/resistance levels — the same inputs a human
-analyst would summarize from. That keeps the explanation tied to what the
-engine actually detected. If this is ever swapped for an LLM call (e.g.
-Gemini) to make the prose more natural, that call must keep receiving only
-this same grounded summary — never the raw candles — so it can't invent
-price action the engine didn't compute.
+Sees only the verdict, the matched patterns and the levels, never the raw
+candles, so the wording stays tied to what the engine actually computed.
 """
 
 from __future__ import annotations

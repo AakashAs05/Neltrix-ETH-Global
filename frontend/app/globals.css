@@ -19,3 +19,12 @@ body {
   color: var(--foreground);
   font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
 }
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Anchor scrolling should clear the fixed header. */
+html { scroll-behavior: smooth; }
+section[id], div[id] { scroll-margin-top: 5rem; }

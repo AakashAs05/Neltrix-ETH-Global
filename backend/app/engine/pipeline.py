@@ -1,8 +1,7 @@
-"""Orchestrates the full analysis: fetch (Graph) -> detect -> score -> serialize.
+"""Fetch, detect, score, serialize.
 
-This is the one function routes_analyse.py calls. Keeping it separate from
-the route handler means the same analysis can be driven from a script or a
-test without going through FastAPI.
+Kept out of the route handler so the same analysis can run from a script or
+a test without FastAPI in the way.
 """
 
 from __future__ import annotations
@@ -35,8 +34,7 @@ class AnalysisResult:
     candles: list[Candle]
     series: CandleSeries | None = None
     patterns: list[PatternMatch] = field(default_factory=list)
-    # How many raw geometric matches existed before significance
-    # filtering — reported so the trim is visible, not silent.
+    # Raw match count before filtering, reported so the trim is visible.
     total_detected: int = 0
     support_resistance: list[PriceLevel] = field(default_factory=list)
     verdict: Verdict | None = None
@@ -64,7 +62,7 @@ def run_analysis(
     if len(candles) < MIN_CANDLES:
         raise ValueError(
             f"Only {len(candles)} candle(s) available for this pool over the "
-            f"'{range_key}' window at '{interval}' — need at least {MIN_CANDLES} "
+            f"'{range_key}' window at '{interval}', need at least {MIN_CANDLES} "
             "for pattern detection. Try a longer range or a shorter interval."
         )
 
@@ -75,13 +73,11 @@ def run_analysis(
 
     support_resistance = compute_support_resistance(candles)
 
-    # Levels have to exist before patterns can be judged against them, so
-    # significance filtering happens after support/resistance is computed.
+    # Levels must exist before patterns can be judged against them.
     patterns = filter_significant(detected, candles, support_resistance)
 
-    # The verdict scores only what survived. Feeding it every raw match let
-    # dozens of weak, context-free candlestick shapes outvote the handful
-    # of real formations.
+    # Only what survived gets a vote. Raw matches let weak candlestick
+    # shapes outvote the real formations.
     verdict = compute_verdict(patterns, total_candles=len(candles))
     explanation = explain(verdict, patterns, support_resistance, resolved_base_symbol)
 

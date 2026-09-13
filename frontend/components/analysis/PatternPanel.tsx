@@ -11,8 +11,7 @@ const DIRECTION_BADGE: Record<Pattern["direction"], string> = {
   neutral: "bg-zinc-500/10 text-zinc-400 border-zinc-500/30",
 };
 
-/** Mirrors CATEGORY_WEIGHT in backend/app/engine/signals.py — harmonic
- *  patterns are rarer and more specific, so they count for more. */
+/** Harmonic patterns are rarer and more specific, so they count for more. */
 const CATEGORY_LABEL: Record<PatternCategory, string> = {
   harmonic: "Harmonic",
   classic: "Chart",

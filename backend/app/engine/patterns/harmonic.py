@@ -1,15 +1,7 @@
-"""XABCD harmonic patterns (Gartley, Bat, Butterfly, Crab) via Fibonacci ratios.
+"""XABCD harmonic patterns via Fibonacci ratios.
 
-Five consecutive, alternating swing points (X-A-B-C-D) are checked against
-each pattern's canonical ratio ranges:
-
-  B = retracement of leg AB against leg XA
-  D = retracement/extension of leg AD against leg XA  (Gartley/Bat retrace,
-      Butterfly/Crab extend past X)
-
-C is not used to distinguish between patterns here (its valid range
-overlaps heavily across all four), but is still required to fall in a
-broadly sane retracement band so degenerate/flat legs don't slip through.
+Five alternating swing points are checked against each pattern's canonical
+B and D ratios. C is only used to reject degenerate legs.
 """
 
 from __future__ import annotations
@@ -18,7 +10,7 @@ from app.graph.candle_builder import Candle
 
 from . import BEARISH, BULLISH, PatternMatch, find_swing_points
 
-# (b_ratio range, d_ratio range) — tolerance already baked into the ranges.
+# (b_ratio range, d_ratio range), tolerance already baked into the ranges.
 PATTERN_SPECS: dict[str, tuple[tuple[float, float], tuple[float, float]]] = {
     "Gartley": ((0.56, 0.68), (0.73, 0.85)),
     "Bat": ((0.35, 0.55), (0.83, 0.95)),
@@ -72,7 +64,7 @@ def detect(candles: list[Candle], swing_window: int = 2) -> list[PatternMatch]:
                         end_timestamp=d.timestamp,
                         description=(
                             f"XABCD {name} pattern completing near ${d.price:.4f}: "
-                            f"B retraced {b_ratio:.0%} of XA, D at {d_ratio:.0%} of XA — "
+                            f"B retraced {b_ratio:.0%} of XA, D at {d_ratio:.0%} of XA, "
                             f"{'reversal up' if bullish else 'reversal down'} expected at D."
                         ),
                     )

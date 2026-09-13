@@ -1,22 +1,8 @@
 """One query shape, run unmodified against multiple protocols.
 
-This is the file that earns Neltrix its "composable across The Graph"
-claim. Uniswap V3 and SushiSwap are two independently-built, independently
-maintained AMMs, but Messari publishes both of them as "dex-amm"
-Standardized Subgraphs, which means both expose the *same* GraphQL schema
-(`DexAmmProtocol`, `LiquidityPool`, `Swap`, ...). Every function below takes
-a `protocol` key and dispatches to a different subgraph ID, but sends the
-exact same query string either way. Nothing here is Uniswap-specific or
-Sushi-specific.
-
-Verified subgraph IDs (Messari "dex-amm" schema family, Ethereum mainnet,
-decentralized network, checked live against the gateway on 2026-09-08):
-
-    uniswap-v3-ethereum  -> 4cKy6QQMc5tpfdx8yxfYeb9TLZmgLQe44ddW1G7NwkA6
-    sushiswap-ethereum   -> 77jZ9KWeyi3CJ96zkkj5s1CojKPHt6XJKjLFzsDCd8Fd
-
-Adding a third protocol (e.g. uniswap-v2-ethereum, also "dex-amm") is a
-one-line addition to PROTOCOLS below, no new query, no new parsing code.
+Messari publishes Uniswap V3 and SushiSwap under the same "dex-amm" schema,
+so every function here dispatches on a subgraph ID but sends an identical
+query string. Adding another dex-amm protocol is one line in PROTOCOLS.
 """
 
 from __future__ import annotations
@@ -79,11 +65,8 @@ def _get_protocol(protocol_key: str) -> Protocol:
 # --- The one query shape --------------------------------------------------
 # Same string, sent to whichever protocol's subgraph_id the caller asked for.
 
-# Deliberately excludes fields like `cumulativeSwapCount` and `tick` that
-# exist on Uniswap V3's schema (v4.0.1) but not on SushiSwap's (v1.3.2) —
-# Messari schema versions drift slightly between protocols. Only fields
-# present in every deployment this project queries belong in a query meant
-# to run unmodified across protocols; that constraint is the whole point.
+# Only fields present on every deployment belong here. cumulativeSwapCount
+# exists on Uniswap V3's schema (v4.0.1) but not SushiSwap's (v1.3.2).
 TOP_POOLS_QUERY = """
 query TopPools($first: Int!) {
   liquidityPools(first: $first, orderBy: cumulativeVolumeUSD, orderDirection: desc) {
@@ -96,18 +79,13 @@ query TopPools($first: Int!) {
 }
 """
 
-# The Graph's gateway caps `first` at 1000 per query regardless of what
-# any individual indexer advertises — asking for more just returns a
-# "bad indexers" error instead of more rows. get_recent_swaps() below
-# pages through this in chunks of up to 1000 for any larger `limit`.
+# The gateway caps `first` at 1000 per query. Asking for more returns a
+# "bad indexers" error rather than more rows, so larger limits are paged.
 MAX_PAGE_SIZE = 1000
 
-# The field selection is the part that has to stay identical across
-# protocols — that's the composability claim. The surrounding filters
-# (pagination cursor, range bound) are generic plumbing and are assembled
-# per-call below, because graph-node rejects a null `timestamp_lte` /
-# `timestamp_gte`: an unused bound has to be absent from the query text,
-# not passed as a null variable.
+# The field selection is what stays identical across protocols. Filters are
+# assembled per call because graph-node rejects a null timestamp bound, so an
+# unused one has to be absent from the query text rather than passed as null.
 _SWAP_FIELDS = """
     id
     timestamp
@@ -164,17 +142,9 @@ def get_recent_swaps(
 ) -> list[dict[str, Any]]:
     """Raw swap events for one pool, newest first. Feeds candle_builder.
 
-    Pages through MAX_PAGE_SIZE-sized chunks for any `limit` above that.
-    The cursor is the oldest timestamp seen so far, refetched with
-    `timestamp_lte` — since many swaps can share one block's timestamp,
-    that overlaps the previous page by design and results are deduped by
-    `id` rather than risking a `timestamp_lt` cursor silently skipping
-    swaps that share a timestamp with the page boundary.
-
-    `since` bounds how far back to walk. `limit` still caps the total:
-    Messari's schema publishes no OHLC aggregates, so a long range here
-    genuinely has to replay every swap, and the cap is what stops a
-    "1 year" request on a busy pool from crawling for minutes.
+    Pages on a `timestamp_lte` cursor and dedupes by id, since many swaps
+    share a block timestamp and a strict `lt` cursor would skip the ones on
+    the boundary. `limit` caps the walk; this schema has no OHLC to fall back on.
     """
     protocol = _get_protocol(protocol_key)
     client = get_client()
@@ -185,12 +155,9 @@ def get_recent_swaps(
     cursor: int | None = None
 
     while len(collected) < limit:
-        # Always request a full page rather than only the shortfall. Each
-        # page overlaps the previous one at the cursor timestamp and those
-        # duplicates are deduped away, so shrinking pages degenerate into
-        # a tail of 1-row requests that return nothing new — which used to
-        # leave the loop one row short of `limit` and made "did we hit the
-        # ceiling?" unanswerable. Overshoot is trimmed at the end instead.
+        # Always a full page, never just the shortfall. Shrinking pages
+        # degenerate into 1-row requests that return only duplicates, which
+        # left the loop a row short and broke the ceiling check.
         page_size = MAX_PAGE_SIZE
         variables: dict[str, Any] = {"pool": pool_id, "first": page_size}
         if cursor is not None:
@@ -210,7 +177,7 @@ def get_recent_swaps(
 
         new_swaps = [s for s in page if s["id"] not in seen_ids]
         if not new_swaps:
-            break  # every swap at this cursor has already been collected — no more pages
+            break  # everything at this cursor is already collected
 
         for swap in new_swaps:
             seen_ids.add(swap["id"])
@@ -218,7 +185,7 @@ def get_recent_swaps(
         cursor = int(page[-1]["timestamp"])
 
         if len(page) < page_size:
-            break  # fewer rows than asked for — reached the end of history
+            break  # short page means we reached the end of history
 
     return collected[:limit]
 
@@ -250,8 +217,7 @@ def get_pool_info(protocol_key: str, pool_id: str) -> dict[str, Any]:
 def infer_base_symbol(protocol_key: str, pool_id: str) -> str:
     """Pick which side of the pair to chart when the caller doesn't say.
 
-    Prefers the non-stablecoin token (e.g. WETH in a USDC/WETH pool); falls
-    back to the first token alphabetically for stable/stable or vol/vol pairs.
+    Prefers the non-stablecoin token, falling back to alphabetical order.
     """
     pool = get_pool_info(protocol_key, pool_id)
     symbols = [t["symbol"] for t in pool["inputTokens"]]

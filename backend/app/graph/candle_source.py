@@ -1,27 +1,8 @@
-"""Picks how to build candles for a given (protocol, interval, range).
+"""Picks how to build candles for a given protocol, interval and range.
 
-There are two ways to get OHLC out of a subgraph, with very different
-costs, and which one is available depends on the protocol:
-
-  * **Subgraph aggregate** — Uniswap's own schema publishes real
-    open/high/low/close per hour and per day (`poolHourDatas`,
-    `poolDayDatas`). A year of daily candles is one query of 365 rows.
-    Messari's dex-amm schema publishes *no* OHLC at all — its hourly and
-    daily snapshots carry volume, TVL and revenue but no price — so this
-    path exists only for Uniswap V4 here.
-
-  * **Derived from raw swaps** — replay individual `Swap` events and
-    bucket them (graph/candle_builder.py). Works for every protocol and
-    every interval, and is the only option for sub-hourly candles, but
-    the cost scales with how busy the pool is rather than with how much
-    time the caller asked for. The Uniswap V4 ETH/USDC pool alone takes
-    ~1.4M swaps to cover its history, so long ranges here are capped and
-    the truncation is reported rather than hidden.
-
-The resolver prefers the aggregate whenever it can serve the request, and
-falls back to swaps otherwise. Callers get a CandleSeries that says which
-path ran, so the UI can show provenance instead of implying every chart
-was built the same way.
+Uniswap's own schema publishes real OHLC per hour and day, so a year costs
+one query. Messari's publishes none, so those protocols replay raw swaps at
+a cost that scales with pool activity. Callers are told which path ran.
 """
 
 from __future__ import annotations
@@ -40,14 +21,11 @@ from app.graph.candle_builder import (
 )
 from app.uniswap import v4_pool_client
 
-# Ceiling on how many raw swaps a single request will pull. Ten pages of
-# 1000 is a few seconds against a healthy indexer; beyond that the wait
-# stops being interactive and the caller is better served by a coarser
-# interval on the aggregate path.
+# Ceiling on raw swaps per request. Ten pages is a few seconds; beyond that
+# the wait stops being interactive.
 MAX_SWAPS_PER_REQUEST = 10_000
 
-# Which granularities the subgraph actually publishes, and what each
-# requested interval can be built from. 4h isn't published anywhere, but
+# What each interval can be built from. 4h is not published anywhere but
 # rolls up cleanly from four hourly candles.
 AGGREGATE_PLAN: dict[str, tuple[str, bool]] = {
     # interval: (granularity to fetch, needs resampling)
@@ -74,7 +52,7 @@ class CandleSeries:
 
 
 def supports_aggregates(protocol_key: str) -> bool:
-    """Only Uniswap's native schema publishes OHLC; Messari's does not."""
+    """Only Uniswap's native schema publishes OHLC. Messari's does not."""
     return protocol_key == v4_pool_client.PROTOCOL_KEY
 
 
@@ -130,6 +108,12 @@ def _from_aggregates(
             f"({report.dropped_non_positive} non-positive, {report.dropped_zero_volume} "
             f"zero-volume, {report.dropped_extreme_range} implausible range)."
         )
+    if report.clamped_wicks:
+        notes.append(
+            f"Clamped implausible wicks on {report.clamped_wicks} candle(s), single "
+            "out-of-range prints (MEV sandwiches, dust swaps) had set highs/lows far "
+            "outside local price. Bodies are unchanged."
+        )
 
     candles = resample(clean, interval) if needs_resample else clean
 
@@ -164,19 +148,12 @@ def _from_swaps(
     candles = build_ohlcv(swaps, base_symbol=base_symbol, interval=interval)
     clean, report = sanitize_candles(candles)
 
-    # Truncation is about *coverage*, not row count: did we actually reach
-    # back to the start of the window the caller asked for? Two different
-    # reasons the data can stop short, and only one of them is truncation:
-    #
-    #   * we hit the swap ceiling first  -> truncated, more data exists
-    #   * the pool has no older swaps    -> complete, that's all there is
-    #
-    # An earlier version inferred this from `len(swaps) >= ceiling`, which
-    # silently under-reported: page-boundary dedup left the loop one row
-    # short, so a 1-year request returning 2 days claimed to be complete.
+    # Truncation is about coverage, not row count. Hitting the ceiling means
+    # more data exists; running out of swaps means we got everything. A plain
+    # row-count check under-reported, since dedup left the loop a row short.
     hit_ceiling = len(swaps) >= MAX_SWAPS_PER_REQUEST
     oldest_covered = min(int(s["timestamp"]) for s in swaps) if swaps else since
-    # One interval of slack: landing inside the first bucket counts as covered.
+    # One interval of slack, so landing in the first bucket counts as covered.
     truncated = hit_ceiling and oldest_covered > since + INTERVAL_SECONDS[interval]
 
     notes: list[str] = []
@@ -187,11 +164,13 @@ def _from_swaps(
             f"'{range_key}' window. Showing data back to "
             f"{time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(oldest_covered))} instead. "
             "This source publishes no OHLC aggregates, so every candle has to be "
-            "rebuilt from individual swaps — a coarser interval on Uniswap V4 covers "
+            "rebuilt from individual swaps, a coarser interval on Uniswap V4 covers "
             "far more ground for the same cost."
         )
     if report.dropped_total:
         notes.append(f"Dropped {report.dropped_total} unusable candle(s).")
+    if report.clamped_wicks:
+        notes.append(f"Clamped implausible wicks on {report.clamped_wicks} candle(s).")
 
     return CandleSeries(
         candles=clean,
