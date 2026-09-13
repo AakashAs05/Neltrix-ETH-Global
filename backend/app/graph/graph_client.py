@@ -1,10 +1,7 @@
-"""Thin, generic GraphQL client for The Graph's decentralized-network gateway.
+"""Generic GraphQL client for The Graph's gateway.
 
-Every Graph query in this project, regardless of which protocol or chain it
-targets, goes through this one client. It knows nothing about DEXes,
-pools, or OHLCV; it just authenticates, POSTs a query to a subgraph ID, and
-surfaces GraphQL errors as Python exceptions instead of silently returning
-partial data.
+Knows nothing about DEXes or pools. It authenticates, POSTs a query, and
+raises on GraphQL errors instead of returning half a response.
 """
 
 from __future__ import annotations
@@ -52,25 +49,11 @@ class GraphClient:
         retries: int = 3,
         retry_backoff_seconds: float = 1.0,
     ) -> dict[str, Any]:
-        """Run one GraphQL query against `subgraph_id` and return `data`.
+        """Run a query and return `data`, retrying transient indexer failures.
 
-        Raises GraphQueryError on GraphQL errors so callers don't have to
-        remember to check for an "errors" key on every response.
-
-        The Graph's gateway load-balances each query across several
-        indexers on the decentralized network; an individual indexer being
-        slow, unsynced, or briefly unhealthy shows up as a "bad indexers"
-        GraphQL error rather than an HTTP failure, even though a retry a
-        moment later routes around it and succeeds. So a handful of
-        retries here is standard practice for this API, not a sign of a
-        broken query.
-
-        A slow indexer can also stall past the client timeout instead of
-        answering, which surfaces as httpx.TimeoutException rather than a
-        GraphQL error. That's the same transient condition and gets the
-        same retry — and if every attempt fails it's re-raised as a
-        GraphQueryError, so callers have exactly one exception type to
-        handle and the API returns a useful 502 instead of a bare 500.
+        The gateway load-balances across indexers, so an unhealthy one shows
+        up as a "bad indexers" error or a timeout that a retry routes around.
+        Both are re-raised as GraphQueryError if every attempt fails.
         """
         payload: dict[str, Any] = {"query": query}
         if variables:

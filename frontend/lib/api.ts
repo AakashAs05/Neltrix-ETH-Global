@@ -1,11 +1,6 @@
 /**
- * Thin fetch wrappers around the FastAPI backend.
- *
- * The backend surfaces its failures as FastAPI `{ "detail": "..." }` bodies
- * (a 502 when The Graph's indexers misbehave, a 400 when a pool has too
- * little history to build candles from). Those messages are genuinely
- * useful to show the user, so unwrapError pulls them out instead of
- * throwing a bare "Request failed".
+ * Fetch wrappers around the FastAPI backend. Errors come back as FastAPI
+ * `detail` strings that are worth showing, so unwrapError pulls them out.
  */
 
 import type {
@@ -37,7 +32,7 @@ async function unwrapError(response: Response): Promise<never> {
       detail = body.detail;
     }
   } catch {
-    // Non-JSON error body (a proxy error page, say) — keep the status text.
+    // Non-JSON error body (a proxy error page, say). Keep the status text.
   }
   throw new ApiError(detail, response.status);
 }

@@ -1,10 +1,7 @@
 """Support/resistance levels and the weighted verdict rules.
 
-The verdict is a deterministic, explainable roll-up of every PatternMatch
-the three detectors produced: each pattern's vote is weighted by how
-specific its category tends to be (harmonic > classic > candlestick) and
-by how recent it is (a pattern that just completed on the latest candle
-matters more than one from the start of the window).
+Each detected pattern votes, weighted by how specific its category tends to
+be and by how recently it completed.
 """
 
 from __future__ import annotations
@@ -46,23 +43,11 @@ def compute_support_resistance(
     min_touches: int = MIN_LEVEL_TOUCHES,
     max_levels: int = MAX_LEVELS_PER_KIND,
 ) -> list[PriceLevel]:
-    """Cluster swing highs/lows into the handful of levels worth drawing.
+    """Cluster swing highs and lows into the few levels worth drawing.
 
-    Three things this has to get right, each of which was wrong or absent
-    in the first pass and showed up as a chart full of near-duplicate
-    dashed lines:
-
-    1. **Cluster against the running mean, not the first member.** Chaining
-       each point against `cluster[0]` lets a slow drift either split one
-       real level in two or, worse, swallow a wide band into a single
-       "level" whose average sits at a price that was never touched.
-    2. **A single swing point is not a level.** A level means price turned
-       there more than once; `min_touches` enforces that, which alone
-       removes most of the noise.
-    3. **Support and resistance can collide.** The same price often acts as
-       both across a long window, and drawing two lines a few dollars
-       apart is just visual noise — so overlapping pairs are merged, kept
-       under whichever side had more touches.
+    Clusters against the running mean rather than the first member, requires
+    more than one touch, and merges support/resistance sitting on the same
+    price. Without all three the chart fills with near-duplicate lines.
     """
     swings = find_swing_points(candles, window=2)
     if not swings:
@@ -89,8 +74,7 @@ def compute_support_resistance(
                 continue
             prices = [price for price, _ in cluster]
             newest_index = max(index for _, index in cluster)
-            # A level touched recently is more actionable than the same
-            # level last respected at the very start of the window.
+            # A recently touched level matters more than a stale one.
             recency = 0.6 + 0.4 * (newest_index / max(last_index, 1))
             strength = min(1.0, (touches / 5) * recency)
             levels.append(
@@ -105,8 +89,7 @@ def compute_support_resistance(
     levels = _merge_colliding_levels(levels, tolerance)
     levels.sort(key=lambda level: -level.strength)
 
-    # Cap per kind rather than overall, so a chart never ends up with
-    # (say) four resistances and no support.
+    # Cap per kind, so a chart never ends up all resistance and no support.
     kept: list[PriceLevel] = []
     for kind in ("support", "resistance"):
         kept.extend([level for level in levels if level.kind == kind][:max_levels])
@@ -122,8 +105,7 @@ def _merge_colliding_levels(levels: list[PriceLevel], tolerance: float) -> list[
             previous = merged[-1]
             same_price = abs(level.price - previous.price) / max(previous.price, 1e-9) <= tolerance
             if same_price:
-                # Keep the side with more touches; a price that flipped
-                # between roles is one level, not two.
+                # A price that flipped roles is one level, not two.
                 winner = previous if previous.touches >= level.touches else level
                 merged[-1] = PriceLevel(
                     price=(previous.price + level.price) / 2,
@@ -136,14 +118,11 @@ def _merge_colliding_levels(levels: list[PriceLevel], tolerance: float) -> list[
     return merged
 
 
-# Minimum confidence a pattern needs before it's worth reporting at all.
-# Candlestick shapes are common and individually weak, so they're held to
+# Candlestick shapes are common and individually weak, so they are held to
 # a higher bar than the rarer multi-candle formations.
 CONFIDENCE_FLOOR = {"harmonic": 0.45, "classic": 0.50, "candlestick": 0.65}
 
-# A candlestick pattern is only meaningful where price was already
-# contested. Within this band of a support/resistance level counts as "at"
-# that level.
+# A candlestick pattern only counts where price was already contested.
 LEVEL_PROXIMITY = 0.006
 
 
@@ -152,27 +131,11 @@ def filter_significant(
     candles: list[Candle],
     levels: list[PriceLevel],
 ) -> list[PatternMatch]:
-    """Cut the raw detections down to the ones actually worth showing.
+    """Cut raw detections down to the ones worth showing.
 
-    Geometric detection alone reports every shape that technically
-    matches, which on a week of hourly candles ran to ~100 matches — far
-    more than a chart that size can plausibly contain in signal terms.
-    Three filters, in order of how much they remove:
-
-    1. **Context.** A candlestick reversal shape in the middle of a range
-       is noise; the same shape at a level price has repeatedly turned at
-       is the actual setup traders look for. Candlestick patterns must
-       land within LEVEL_PROXIMITY of a support/resistance level.
-       Multi-candle formations (chart, harmonic) carry their own
-       structure and are exempt.
-    2. **Confidence floor.** Per-category, since the categories aren't
-       comparable on the same scale.
-    3. **Non-maximum suppression.** Where several matches of the same name
-       overlap in time they describe one formation, so only the
-       best-scoring one survives.
-
-    Nothing is deleted — the caller keeps the unfiltered list and reports
-    both counts, so the filtering is visible rather than a silent trim.
+    Filters on context (a candlestick shape only counts near a level), a
+    per-category confidence floor, and non-maximum suppression for
+    overlapping matches. The caller keeps both counts, so the trim is visible.
     """
     if not candles:
         return []
@@ -230,7 +193,7 @@ def compute_verdict(patterns: list[PatternMatch], total_candles: int) -> Verdict
     max_possible = 0.0
 
     # Repeated instances of the same pattern name inside one window are
-    # correlated evidence, not independent confirmation — nine Bearish
+    # correlated evidence, not independent confirmation, nine Bearish
     # Haramis in a choppy week describe one recurring characteristic of
     # that chop. Summing them at full weight let a single weak pattern
     # type outvote everything else, so each further occurrence counts for

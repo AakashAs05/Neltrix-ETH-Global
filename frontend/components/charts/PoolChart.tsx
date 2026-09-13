@@ -1,13 +1,9 @@
 "use client";
 
 /**
- * Hand-rolled SVG candlestick chart.
- *
- * Deliberately not a charting library: the pattern overlays here need to
- * draw arbitrary spans tied to specific candle indices (a Head & Shoulders
- * across 30 candles, a support cluster line at a computed price), which is
- * more fighting than help with a general-purpose library's API. The whole
- * chart is one <svg> in a fixed viewBox scaled to the container width.
+ * Hand-rolled SVG candlestick chart. Not a library, because the pattern
+ * overlays need arbitrary spans tied to candle indices, which is more
+ * fighting than help with a general-purpose charting API.
  */
 
 import { useMemo, useState } from "react";
@@ -41,13 +37,8 @@ export default function PoolChart({
 }: PoolChartProps) {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
 
-  /**
-   * Only the strongest support and the strongest resistance get drawn.
-   * The backend returns up to three of each, and rendering them all
-   * turned the chart into a thicket of near-identical dashed lines that
-   * obscured the price action they were supposed to annotate. The full
-   * ranked list still shows in the levels panel beside the chart.
-   */
+  /** Only the strongest of each kind is drawn. Rendering all three turned
+   *  the chart into a thicket of near-identical dashed lines. */
   const drawnLevels = useMemo(() => {
     const strongest = (kind: PriceLevel["kind"]) =>
       supportResistance
@@ -161,7 +152,7 @@ export default function PoolChart({
         {/* Bounded boxes around each multi-candle formation.
             Earlier these were full-height tint bands, which read as vague
             vertical stripes and said nothing about *where* the pattern
-            sits — a box drawn to the actual high/low of the candles it
+            sits, as a box drawn to the actual high/low of the candles it
             spans shows the formation itself. */}
         {spanPatterns.map((pattern, i) => {
           const start = timestampToIndex.get(pattern.start_timestamp);
@@ -209,7 +200,7 @@ export default function PoolChart({
           );
         })}
 
-        {/* Single-candle patterns get a small marker rather than a box —
+        {/* Single-candle patterns get a small marker rather than a box,
             a box around one candle is just a thicker candle. */}
         {markerPatterns.map((pattern, i) => {
           const index = timestampToIndex.get(pattern.end_timestamp);

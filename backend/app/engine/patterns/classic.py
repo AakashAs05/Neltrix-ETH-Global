@@ -1,10 +1,7 @@
-"""Multi-candle chart patterns built from swing highs/lows.
+"""Chart patterns built from swing highs and lows.
 
-Detected here: Double Top/Bottom, Head & Shoulders (and inverse), and the
-triangle/wedge family (built from the trendline slope through the last few
-swings). All of it operates on find_swing_points() from __init__.py, so
-it's tolerant of the same window/threshold constants regardless of which
-pattern is being checked.
+Double tops and bottoms, head and shoulders, and the triangle/wedge family.
+All of it runs off find_swing_points.
 """
 
 from __future__ import annotations
@@ -70,26 +67,22 @@ def _detect_double_top_bottom(swings: list[SwingPoint], candles: list[Candle]) -
     return matches
 
 
-# The head has to actually stand out from the shoulders. Without this a
-# barely-higher middle peak in ordinary chop reads as a Head & Shoulders,
-# which is why six of them were being reported in a single week of hourly
-# candles — a formation that should be rare.
+# The head has to stand out. Without this, a barely-higher middle peak in
+# ordinary chop reads as a Head and Shoulders.
 MIN_HEAD_PROMINENCE = 0.02
 
-# The two troughs between the peaks form the neckline. A real formation
-# has a roughly level neckline; if the two lows are far apart the shape
-# isn't the pattern regardless of what the peaks do.
+# The troughs between the peaks form the neckline. If they sit far apart,
+# the shape is not the pattern no matter what the peaks do.
 NECKLINE_TOLERANCE = 0.03
 
 
 def _head_and_shoulders_confidence(
     left: SwingPoint, head: SwingPoint, right: SwingPoint, neck_a: float, neck_b: float
 ) -> float:
-    """Score how well-formed the shape is, rather than assuming a flat 0.65.
+    """Score how well-formed the shape is.
 
-    Three independent qualities, averaged: how symmetric the shoulders
-    are, how level the neckline is, and how far the head stands proud of
-    the shoulders. All three are what a chartist actually eyeballs.
+    Averages shoulder symmetry, neckline levelness and head prominence,
+    which is roughly what a chartist eyeballs.
     """
     shoulder_symmetry = 1 - min(1.0, abs(left.price - right.price) / max(left.price, 1e-9) / 0.04)
     neckline_levelness = 1 - min(1.0, abs(neck_a - neck_b) / max(neck_a, 1e-9) / NECKLINE_TOLERANCE)
@@ -178,7 +171,7 @@ def _detect_head_and_shoulders(swings: list[SwingPoint], candles: list[Candle]) 
 
 def _slope(points: list[SwingPoint]) -> float:
     """Simple two-point slope (price change per candle index) rather than a
-    full least-squares fit — good enough for classifying flat/rising/falling."""
+    full least-squares fit, good enough for classifying flat/rising/falling."""
     if len(points) < 2:
         return 0.0
     first, last = points[0], points[-1]
@@ -214,15 +207,15 @@ def _detect_triangles_and_wedges(swings: list[SwingPoint], candles: list[Candle]
         )
 
     if abs(high_pct) <= flat and low_pct > flat:
-        return [make("Ascending Triangle", BULLISH, 0.55, "Flat resistance with a series of higher lows — bullish continuation setup.")]
+        return [make("Ascending Triangle", BULLISH, 0.55, "Flat resistance with a series of higher lows, bullish continuation setup.")]
     if abs(low_pct) <= flat and high_pct < -flat:
-        return [make("Descending Triangle", BEARISH, 0.55, "Flat support with a series of lower highs — bearish continuation setup.")]
+        return [make("Descending Triangle", BEARISH, 0.55, "Flat support with a series of lower highs, bearish continuation setup.")]
     if high_pct < -flat and low_pct > flat:
-        return [make("Symmetrical Triangle", NEUTRAL, 0.45, "Highs falling and lows rising into a converging range — breakout direction undetermined.")]
+        return [make("Symmetrical Triangle", NEUTRAL, 0.45, "Highs falling and lows rising into a converging range, breakout direction undetermined.")]
     if high_pct > flat and low_pct > flat and high_pct < low_pct:
-        return [make("Rising Wedge", BEARISH, 0.5, "Both highs and lows rising but converging — often resolves lower.")]
+        return [make("Rising Wedge", BEARISH, 0.5, "Both highs and lows rising but converging, often resolves lower.")]
     if high_pct < -flat and low_pct < -flat and high_pct < low_pct:
-        return [make("Falling Wedge", BULLISH, 0.5, "Both highs and lows falling but converging — often resolves higher.")]
+        return [make("Falling Wedge", BULLISH, 0.5, "Both highs and lows falling but converging, often resolves higher.")]
     return []
 
 

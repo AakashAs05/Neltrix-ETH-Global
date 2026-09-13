@@ -1,4 +1,4 @@
-"""GET /api/protocols, /api/pools, /api/ohlcv — the Graph data pipeline surface."""
+"""GET /api/protocols, /api/pools, /api/ohlcv, the Graph data pipeline surface."""
 
 from __future__ import annotations
 

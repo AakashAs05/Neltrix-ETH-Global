@@ -73,7 +73,7 @@ export default function VerdictCard({
       <p className="mt-4 text-sm leading-relaxed text-zinc-300">{explanation}</p>
 
       <p className="mt-3 border-t border-zinc-800 pt-3 text-xs leading-relaxed text-zinc-500">
-        Derived from onchain swap events only. Not financial advice — the verdict is a
+        Derived from onchain swap events only. Not financial advice. The verdict is a
         weighted roll-up of detected patterns, not a prediction.
       </p>
     </section>

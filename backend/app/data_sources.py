@@ -1,19 +1,8 @@
-"""One interface over both data paths, so callers don't care which schema a protocol speaks.
+"""One interface over both data paths.
 
-Two backing clients exist, for a real reason rather than an accident of
-history:
-
-  * app/graph/standardized_query.py — Uniswap V3 and SushiSwap, both on
-    Messari's "dex-amm" Standardized Subgraph schema. One query shape,
-    many protocols. This is the composability story.
-  * app/uniswap/v4_pool_client.py — Uniswap V4, on Uniswap's own native
-    schema, because no Messari dex-amm deployment exists for V4.
-
-Everything above this module (the routes, the pipeline, the engine) works
-in terms of a `protocol_key` and the normalized shapes below, and never
-branches on which schema is underneath. Adding another Messari protocol
-means one line in standardized_query.PROTOCOLS; adding another bespoke
-schema means another adapter plus one line in _V4_KEYS-style dispatch here.
+Uniswap V3 and SushiSwap go through the Messari standardized schema;
+Uniswap V4 has no such deployment and uses its own adapter. Nothing above
+this module branches on which schema is underneath.
 """
 
 from __future__ import annotations
@@ -48,8 +37,7 @@ def _is_v4(protocol_key: str) -> bool:
 
 
 def list_protocols() -> list[ProtocolInfo]:
-    """Uniswap V4 is listed first: it's the flagship pool source for this
-    project, and the UI pins it to the top of the picker."""
+    """V4 first, since it is the flagship source and the UI pins it there."""
     protocols = [
         ProtocolInfo(
             key=v4_pool_client.PROTOCOL_KEY,
@@ -106,8 +94,7 @@ def get_top_pools(protocol_key: str, limit: int = 20) -> list[PoolSummary]:
 
 
 def get_recent_swaps(protocol_key: str, pool_id: str, limit: int = 1000) -> list[dict[str, Any]]:
-    """Raw swaps in candle_builder's expected shape, whichever schema the
-    protocol actually speaks."""
+    """Raw swaps in candle_builder's shape, whichever schema is underneath."""
     _assert_known(protocol_key)
     if _is_v4(protocol_key):
         return v4_pool_client.get_recent_swaps(pool_id, limit=limit)

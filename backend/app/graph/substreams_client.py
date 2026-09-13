@@ -1,12 +1,7 @@
-"""Stub for a custom Substreams OHLCV module.
+"""Placeholder for a custom Substreams OHLCV module.
 
-Not built for the hackathon deadline: standardized_query.py + candle_builder.py
-already satisfy the Graph composability requirement (one query shape across
-Uniswap V3 and SushiSwap, both Messari "dex-amm" subgraphs) without needing
-a hand-authored Substreams package. This file is a placeholder in case
-Day 4-5 leave slack to add a real Substreams module (e.g. via the
-Substreams SKILLs one-prompt generator) that streams swap events directly
-from Firehose instead of querying an already-indexed subgraph.
+Not built: the standardized-subgraph path already satisfies the Graph
+composability requirement without hand-authoring a Substreams package.
 """
 
 from __future__ import annotations

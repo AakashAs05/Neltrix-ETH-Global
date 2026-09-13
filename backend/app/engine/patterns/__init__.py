@@ -1,11 +1,7 @@
-"""Shared types and utilities used by all three pattern detectors.
+"""Shared types and the swing-point finder used by all three detectors.
 
-candlestick.py, classic.py, and harmonic.py all consume the same candle
-shape (app.graph.candle_builder.Candle) and all report matches as
-PatternMatch, so those live here instead of being duplicated three times.
-Swing-point detection (local highs/lows) is likewise shared: classic.py
-uses it to find double tops/head-and-shoulders/triangles, and harmonic.py
-uses the same points as the X-A-B-C-D vertices of a harmonic pattern.
+Kept here rather than duplicated, since classic.py and harmonic.py read the
+same swing points as chart vertices.
 """
 
 from __future__ import annotations
@@ -39,10 +35,8 @@ class SwingPoint:
 
 
 def find_swing_points(candles: list, window: int = 2) -> list[SwingPoint]:
-    """A candle is a swing high/low if its high/low is the most extreme
-    within `window` candles on both sides. Simple and deterministic; not
-    as noise-resistant as e.g. ZigZag with a % threshold, but sufficient
-    for detecting the chart-pattern and harmonic-pattern vertices below.
+    """A candle is a swing point if it is the most extreme within `window`
+    candles either side. Less noise-resistant than ZigZag, but enough here.
     """
     points: list[SwingPoint] = []
     n = len(candles)

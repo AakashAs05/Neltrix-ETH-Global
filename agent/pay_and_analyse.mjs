@@ -1,38 +1,9 @@
 /**
- * An agent that BUYS A DATA PRODUCT — one analysis report — autonomously.
+ * An agent that buys one analysis report, autonomously.
  *
- * To be unambiguous about what "pays" means here: this agent is a
- * *customer of an API*. It spends 0.1 HBAR to purchase a single
- * /api/analyse response, the way you might pay per query for market data.
- * It does not trade, does not swap tokens, does not act on the analysis
- * it receives, and holds no position anywhere. The only money that moves
- * is the API fee.
- *
- * What that demonstrates is the payment rail, not a trading strategy.
- * Normally software can only use a paid API after a *human* creates an
- * account, enters a card and pastes an API key into config. An autonomous
- * agent can do none of those things. x402 removes all of it: the agent
- * calls an endpoint it has never seen, is told the price in the 402
- * response, pays, and is served — with no account and no prior
- * relationship with the service.
- *
- * Swap this analysis for any other paid API and the mechanism is identical.
- *
- * Demonstrates the full x402 handshake against the Neltrix paywall with
- * no human in the loop and no prior arrangement with the service:
- *
- *   1. Call POST /api/analyse cold. No API key, no account, no payment.
- *   2. Receive 402 Payment Required. The response *itself* carries the
- *      price, the asset, the recipient and the network — everything
- *      needed to pay is discovered here, not configured ahead of time.
- *   3. Build and sign a Hedera transfer for exactly that amount. The
- *      transaction is only partially signed: the facilitator's fee-payer
- *      account co-signs and covers network fees.
- *   4. Retry the same call with the signed transaction in X-PAYMENT.
- *   5. The service verifies, settles on Hedera testnet, and returns the
- *      analysis plus a settlement receipt.
- *
- * Run with `npm start` from this directory.
+ * It is a customer of an API, not a trader: it spends 0.1 HBAR on a single
+ * /api/analyse response and does not act on what comes back. The point is
+ * the rail, which lets software pay for a service it has no account with.
  */
 
 import dotenv from "dotenv";
@@ -109,7 +80,7 @@ async function main() {
 
   // An autonomous payer needs a ceiling. By default the client only
   // permits assets it recognizes (USDC and friends) under a $1 cap, which
-  // rejects native HBAR outright — so HBAR is opted in explicitly, with a
+  // rejects native HBAR outright, so HBAR is opted in explicitly, with a
   // hard per-payment cap in tinybars. A service that answered the 402 with
   // a larger price than this would be refused before anything is signed,
   // which is the behaviour you want from an agent spending real money.
@@ -172,11 +143,11 @@ async function main() {
     }
     if (receipt.payer) console.log(`    payer       : ${receipt.payer}`);
   } else {
-    console.warn("    (no PAYMENT-RESPONSE header returned — settlement receipt unavailable)");
+    console.warn("    (no PAYMENT-RESPONSE header returned, settlement receipt unavailable)");
   }
 
   const analysis = await paid.json();
-  step(6, "Data product received — this is the goods the 0.1 HBAR bought:");
+  step(6, "Data product received, this is the goods the 0.1 HBAR bought:");
   console.log(`    pool      : ${analysis.protocol} ${analysis.pool.slice(0, 10)}…`);
   console.log(`    candles   : ${analysis.candles.length} × ${analysis.interval} over ${analysis.range}`);
   console.log(`    source    : ${analysis.series.source}`);
@@ -194,7 +165,7 @@ async function main() {
   console.log(`    after  : ${hbar(after)}`);
   console.log(`    delta  : ${hbar(after - before)}`);
   console.log(`\n✅ Purchased 1 analysis report for ${hbar(terms.amount)}.`);
-  console.log("   No account, no API key, no subscription — the price was");
+  console.log("   No account, no API key, no subscription, the price was");
   console.log("   discovered from the 402 response and paid in the same exchange.");
   console.log("   (This agent buys data only. It places no trades and holds no position.)");
 }

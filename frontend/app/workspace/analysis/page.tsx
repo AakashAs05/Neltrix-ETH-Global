@@ -1,17 +1,17 @@
 "use client";
 
 /**
- * Runs /api/analyse for the pool named in the query string and renders the
- * chart, the detected patterns, and the verdict.
- *
- * useSearchParams() forces client-side rendering, so the page body sits
- * inside a <Suspense> boundary as Next requires.
+ * Runs /api/analyse for the pool in the query string. useSearchParams forces
+ * client rendering, hence the Suspense boundary.
  */
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { motion } from "motion/react";
 import { Suspense, useEffect, useState } from "react";
 
+import { AnalysisSkeleton } from "@/components/Skeleton";
+import { SiteNav } from "@/components/SiteNav";
 import PatternPanel from "@/components/analysis/PatternPanel";
 import VerdictCard from "@/components/analysis/VerdictCard";
 import PoolChart from "@/components/charts/PoolChart";
@@ -20,9 +20,12 @@ import { RANGE_LABELS, type AnalyseResponse, type Range } from "@/lib/types";
 
 export default function AnalysisPage() {
   return (
-    <Suspense fallback={<Centered>Loading…</Centered>}>
-      <AnalysisView />
-    </Suspense>
+    <>
+      <SiteNav />
+      <Suspense fallback={<Centered>Loading the workspace</Centered>}>
+        <AnalysisView />
+      </Suspense>
+    </>
   );
 }
 
@@ -80,25 +83,38 @@ function AnalysisView() {
       : null;
 
   return (
-    <main className="mx-auto w-full max-w-6xl px-6 py-10">
+    <main className="mx-auto w-full max-w-6xl px-6 pb-20 pt-24">
       <Link href="/workspace" className="text-sm text-zinc-500 transition-colors hover:text-zinc-300">
         ← Back to pools
       </Link>
 
-      <header className="mt-4 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold text-zinc-100">
-            {result
-              ? `${result.base_symbol} · ${result.interval} · ${RANGE_LABELS[result.range as Range] ?? result.range}`
-              : "Analysing…"}
-          </h1>
-          <p className="mt-1 font-mono text-xs text-zinc-500">
+      <header className="mt-5 flex flex-wrap items-end justify-between gap-5">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight text-zinc-50">
+              {result ? result.base_symbol : "Loading"}
+            </h1>
+            {result && (
+              <>
+                <Pill>{result.interval}</Pill>
+                <Pill>{RANGE_LABELS[result.range as Range] ?? result.range}</Pill>
+              </>
+            )}
+          </div>
+          <p className="mt-1.5 font-mono text-xs text-zinc-500">
             {protocol} · {shortenId(pool)}
           </p>
         </div>
         {latest && (
-          <div className="text-right">
-            <p className="font-mono text-2xl text-zinc-100">{formatPrice(latest.close)}</p>
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.45 }}
+            className="text-right"
+          >
+            <p className="font-mono text-3xl tracking-tight text-zinc-50">
+              {formatPrice(latest.close)}
+            </p>
             {changePct !== null && (
               <p
                 className={`font-mono text-xs ${
@@ -109,14 +125,18 @@ function AnalysisView() {
                 {changePct.toFixed(2)}% over window
               </p>
             )}
-          </div>
+          </motion.div>
         )}
       </header>
 
       {loading && (
-        <Centered>
-          Fetching swaps from The Graph and running detection… this can take a few seconds.
-        </Centered>
+        <>
+          <p className="mt-6 flex items-center gap-2 text-xs text-zinc-500">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-sky-400" />
+            Querying The Graph and running pattern detection
+          </p>
+          <AnalysisSkeleton />
+        </>
       )}
 
       {error && (
@@ -131,7 +151,12 @@ function AnalysisView() {
       )}
 
       {result && (
-        <div className="mt-6 space-y-6">
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, ease: [0.21, 0.47, 0.32, 0.98] }}
+          className="mt-6 space-y-6"
+        >
           <ProvenanceBar result={result} />
           <PoolChart
             candles={result.candles}
@@ -152,18 +177,14 @@ function AnalysisView() {
             </div>
             <PatternPanel patterns={result.patterns} totalDetected={result.total_detected} />
           </div>
-        </div>
+        </motion.div>
       )}
     </main>
   );
 }
 
-/**
- * Says where these candles came from. Two pools charted side by side can
- * be built completely differently — one from the subgraph's published
- * OHLC, one replayed swap by swap — and that difference is worth showing
- * rather than implying every chart is equivalent.
- */
+/** Says where the candles came from, since two charts side by side can be
+ *  built completely differently. */
 function ProvenanceBar({ result }: { result: AnalyseResponse }) {
   const { series, candles } = result;
   const fromAggregate = series.source === "subgraph-aggregate";
@@ -245,6 +266,14 @@ function LevelsCard({ result }: { result: AnalyseResponse }) {
         ))}
       </div>
     </section>
+  );
+}
+
+function Pill({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-0.5 font-mono text-[11px] text-zinc-400">
+      {children}
+    </span>
   );
 }
 
